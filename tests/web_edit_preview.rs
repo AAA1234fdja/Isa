@@ -106,3 +106,18 @@ fn endpoint_fails_closed_without_configured_workspace() {
     assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), "old");
     assert!(!server.workspace.join(".isa").exists());
 }
+
+#[test]
+fn endpoint_reports_advisory_syntax_without_changing_the_source() {
+    let server = Server::start(true);
+    fs::write(server.workspace.join("source.rs"), "fn main() {}\n").unwrap();
+    let patch = proposal("source.rs", "main()", "main(");
+    let (status, body) = server.json(serde_json::json!({"proposal":patch}));
+    assert_eq!(status, 200);
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["syntax"]["status"], "checked");
+    assert_eq!(value["syntax"]["beforeHasErrors"], false);
+    assert_eq!(value["syntax"]["afterHasErrors"], true);
+    assert_eq!(fs::read_to_string(server.workspace.join("source.rs")).unwrap(), "fn main() {}\n");
+    assert!(!server.workspace.join(".isa").exists());
+}

@@ -1,4 +1,4 @@
-use super::{session, Result};
+use super::{session, symbols, Result};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
@@ -133,7 +133,8 @@ pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Valu
     if before.len() as u64 > LIMIT || before.contains('\0') { return Err("Target is not supported or exceeds 1 MiB."); }
     let (after, line) = checked_replacement(&before, old, new).map_err(|_| "The search must match exactly once and the replacement must be valid and within the size limits.")?;
     if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review."); }
-    Ok(json!({"file":file,"search":old,"replacement":new,"line":line,"beforeBytes":before.len(),"afterBytes":after.len(),"readOnly":true}))
+    let syntax = symbols::compare_syntax(Path::new(file), &before, &after);
+    Ok(json!({"file":file,"search":old,"replacement":new,"line":line,"beforeBytes":before.len(),"afterBytes":after.len(),"readOnly":true,"syntax":syntax}))
 }
 
 fn checked_replacement(before: &str, old: &str, new: &str) -> Result<(String, usize)> {

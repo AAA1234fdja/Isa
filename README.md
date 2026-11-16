@@ -287,6 +287,15 @@ incorrect or unsafe change even when formatting is valid, so review it before
 approval. There is no sandbox or race-free protection against a concurrently
 modified workspace, no multi-file transaction, and no automatic test execution.
 
+The `check-edit` JSON and web review also include an advisory Tree-sitter
+syntax comparison for Rust, Python, JavaScript, TypeScript and TSX files. It
+checks the in-memory before and proposed-after snapshots (each at most 64 KiB)
+with a best-effort 100 ms parse budget per snapshot. Unsupported, oversized or
+unfinished parses are reported as unavailable, not as passing. A parse without
+errors is not a compiler, type checker, test suite or correctness guarantee;
+existing errors also make it impossible to infer from the two booleans whether
+a particular error is new. The comparison never writes the proposed result.
+
 ### Read-only web proposal review
 
 Assistant messages containing `<<<<<<< SEARCH` offer **Review proposal**. Paste or edit one complete `File: …` SEARCH/REPLACE block in the dialog and select **Check proposal**. The Rust server checks the existing UTF-8 file in `ISA_WEB_AGENT_WORKSPACE`, validates the same format and exact unique match used by the CLI, and displays the submitted search and replacement literally. No file or undo record is written; this does not apply a patch. A successful check is a snapshot, not a guarantee that the file remains unchanged. A single complete block surrounded by explanations or Markdown fences is extracted for review. When several unambiguous blocks are detected, choose and load one explicitly; only that block is checked, not the combined changes. Loading replaces any text already in the editor. Ambiguous or incomplete blocks must be edited manually. The review can optionally reveal spaces, tabs and line breaks. After a successful check, **Download proposal** saves the checked text to the browser device as `isa-proposal.txt`; it may contain sensitive content. Transfer it to the CLI host if necessary and run `check-edit` or `apply-edit` there, with the correct workspace. Downloading does not authorize or apply anything, and later checks may fail if the file changed. The browser folder picker does not configure the server workspace. The Node development preview does not implement this endpoint. Path exclusions and symlink checks are not a sandbox or race-free security boundary; use a trusted workspace and server, and do not expose it to untrusted clients.

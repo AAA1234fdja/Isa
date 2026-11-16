@@ -22,6 +22,29 @@ fn language(path: &Path) -> Option<tree_sitter::Language> {
     }
 }
 
+// Advisory only: a bounded parse of each complete snapshot, without returning
+// source text or claiming that the grammar reports all compiler errors.
+pub fn compare_syntax(path: &Path, before: &str, after: &str) -> Value {
+    const LIMIT: usize = 64 * 1024;
+    let Some(lang) = language(path) else { return json!({"status":"unsupported"}); };
+    if before.len() > LIMIT || after.len() > LIMIT { return json!({"status":"too_large"}); }
+    fn has_error(lang: &tree_sitter::Language, source: &str) -> Option<bool> {
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(lang).ok()?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
+        let mut progress = |_: &tree_sitter::ParseState| std::time::Instant::now() >= deadline;
+        let bytes = source.as_bytes();
+        let mut read = |offset: usize, _: tree_sitter::Point| &bytes[offset.min(bytes.len())..];
+        let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
+        let tree = parser.parse_with_options(&mut read, None, Some(options))?;
+        Some(tree.root_node().has_error())
+    }
+    match (has_error(&lang, before), has_error(&lang, after)) {
+        (Some(before_error), Some(after_error)) => json!({"status":"checked","method":"tree-sitter","beforeHasErrors":before_error,"afterHasErrors":after_error}),
+        _ => json!({"status":"unavailable"}),
+    }
+}
+
 fn declaration(kind: &str) -> bool {
     matches!(kind, "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item" | "mod_item" | "const_item" | "static_item" | "function_definition" | "class_definition" | "function_declaration" | "generator_function_declaration" | "class_declaration" | "method_definition" | "interface_declaration" | "type_alias_declaration" | "enum_declaration")
 }
@@ -146,6 +169,23 @@ fn scan(root: &Path, query: &str, mode: Lookup) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn syntax_comparison_is_advisory_and_bounded() {
+        let rust = Path::new("main.rs");
+        let clean = "fn main() {}";
+        let broken = "fn main( {}";
+        let introduced = compare_syntax(rust, clean, broken);
+        assert_eq!(introduced["status"], "checked");
+        assert_eq!(introduced["beforeHasErrors"], false); assert_eq!(introduced["afterHasErrors"], true);
+        let fixed = compare_syntax(rust, broken, clean);
+        assert_eq!(fixed["beforeHasErrors"], true); assert_eq!(fixed["afterHasErrors"], false);
+        assert_eq!(compare_syntax(Path::new("note.txt"), "a", "b")["status"], "unsupported");
+        assert_eq!(compare_syntax(rust, &"x".repeat(65537), clean)["status"], "too_large");
+        for path in ["a.py", "a.js", "a.ts", "a.tsx"] {
+            assert_eq!(compare_syntax(Path::new(path), "", "")["status"], "checked");
+        }
+    }
+
     #[test]
     fn recognizes_declarations_without_comment_false_positives() {
         let root = std::env::temp_dir().join(format!("isa-symbols-{}", std::process::id()));
