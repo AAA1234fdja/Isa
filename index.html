@@ -95,14 +95,17 @@ const commands=[
 const completionGhost=document.querySelector('#completionGhost');
 const completionHint=document.querySelector('#completionHint');
 const commandList=document.querySelector('#commandList');
-let completion='';let commandMatches=[];let selectedCommand=0;
+let completion='';let commandMatches=[];let selectedCommand=0;let commandWindowStart=0;
 function acceptCompletion(){if(!completion)return;promptBox.value=completion;promptBox.setSelectionRange(completion.length,completion.length);selectedCommand=0;updateCompletion();promptBox.focus()}
 function updateCompletion(reset=false){
   const text=promptBox.value;
   const atEnd=promptBox.selectionStart===text.length && promptBox.selectionEnd===text.length;
-  if(reset)selectedCommand=0;
-  commandMatches=atEnd && text.startsWith('./') && !/\s/.test(text) ? commands.filter(command=>command.name.startsWith(text.toLowerCase())&&command.name.length>text.length).slice(0,5) : [];
+  if(reset){selectedCommand=0;commandWindowStart=0;}
+  commandMatches=atEnd && text.startsWith('./') && !/\s/.test(text) ? commands.filter(command=>command.name.startsWith(text.toLowerCase())&&command.name.length>text.length) : [];
   if(selectedCommand>=commandMatches.length)selectedCommand=0;
+  if(selectedCommand<commandWindowStart)commandWindowStart=selectedCommand;
+  if(selectedCommand>=commandWindowStart+5)commandWindowStart=selectedCommand-4;
+  commandWindowStart=Math.max(0,Math.min(commandWindowStart,Math.max(0,commandMatches.length-5)));
   completion=commandMatches[selectedCommand]?.name||'';
   completionGhost.hidden=!completion;completionHint.hidden=!completion;commandList.hidden=!completion;
   promptBox.setAttribute('aria-expanded',String(Boolean(completion)));
@@ -111,8 +114,9 @@ function updateCompletion(reset=false){
   completionHint.textContent=completion?'Tab to complete · ↑ ↓ to choose · commands are not connected yet':'';
   commandList.replaceChildren();
   if(completion){
-    const header=document.createElement('div');header.className='command-list-header';header.textContent='COMMANDS · NOT CONNECTED';commandList.append(header);
-    commandMatches.forEach((command,index)=>{
+    const header=document.createElement('div');header.className='command-list-header';header.textContent='COMMANDS · '+(selectedCommand+1)+' / '+commandMatches.length+' · NOT CONNECTED';commandList.append(header);
+    commandMatches.slice(commandWindowStart,commandWindowStart+5).forEach((command,offset)=>{
+      const index=commandWindowStart+offset;
       const option=document.createElement('button');option.type='button';option.className='command-option';option.setAttribute('role','option');option.id='command-option-'+index;option.setAttribute('aria-selected',String(index===selectedCommand));
       const title=document.createElement('span');title.textContent=command.name;const description=document.createElement('small');description.textContent=command.description;option.append(title,description);
       option.addEventListener('mousedown',event=>event.preventDefault());option.addEventListener('click',()=>{selectedCommand=index;completion=command.name;acceptCompletion()});commandList.append(option);
@@ -120,6 +124,7 @@ function updateCompletion(reset=false){
     promptBox.setAttribute('aria-activedescendant','command-option-'+selectedCommand);
   }else promptBox.removeAttribute('aria-activedescendant');
 }
+commandList.addEventListener('wheel',event=>{if(!commandMatches.length||event.deltaY===0)return;event.preventDefault();selectedCommand=Math.max(0,Math.min(commandMatches.length-1,selectedCommand+(event.deltaY>0?1:-1)));updateCompletion()},{passive:false});
 promptBox.addEventListener('input',()=>updateCompletion(true));
 promptBox.addEventListener('click',()=>updateCompletion());
 promptBox.addEventListener('blur',()=>{completionGhost.hidden=true;completionHint.hidden=true;commandList.hidden=true;promptBox.setAttribute('aria-expanded','false');promptBox.removeAttribute('aria-activedescendant')});
@@ -127,7 +132,7 @@ promptBox.addEventListener('focus',()=>updateCompletion());
 document.querySelector('#send').onclick=()=>{send();updateCompletion()};
 promptBox.addEventListener('keydown',event=>{
   if(event.key==='Tab'&&completion){event.preventDefault();acceptCompletion();return}
-  if(completion&&(event.key==='ArrowDown'||event.key==='ArrowUp')){event.preventDefault();selectedCommand=(selectedCommand+(event.key==='ArrowDown'?1:-1)+commandMatches.length)%commandMatches.length;updateCompletion();return}
+  if(completion&&(event.key==='ArrowDown'||event.key==='ArrowUp')){event.preventDefault();selectedCommand=Math.max(0,Math.min(commandMatches.length-1,selectedCommand+(event.key==='ArrowDown'?1:-1)));updateCompletion();return}
   if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();send();updateCompletion()}
 });
 
