@@ -238,5 +238,11 @@ skips symlinks and bounds individual files, aggregate bytes, visited AST nodes,
 and output; results may be incomplete, including after parse errors or skips.
 The workspace file listing itself has a separate cap. File names and symbols
 can contain sensitive information, and exclusions are not a secret scanner. It
-is not a sandbox or a race-free defense against a changing workspace. Provider
-pools and browser-routed custom providers do not use this backend tool.
+is not a sandbox or a race-free defense against a changing workspace. For Agent Pools, set an optional **Pool symbol context** query in chat settings;
+each message then asks for permission before looking up that name on the Rust
+server and sharing at most 15 matching symbols and paths with pool providers.
+A lookup failure stops the pool, and goal/summary helpers do not use this
+context. Clear the query to opt out. The model cannot invoke this lookup itself
+in the pool. Direct custom-provider chats do not use it. The endpoint requires
+same-origin JSON and `ISA_WEB_AGENT_WORKSPACE`; like the rest of the development
+server it is not suitable for public deployment or untrusted local clients.

@@ -105,6 +105,16 @@ fn agent_workspace() -> Option<std::path::PathBuf> {
     root.is_dir().then_some(root)
 }
 
+fn parse_symbol_query(body: &[u8]) -> Result<String, &'static str> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct SymbolRequest { query: String }
+    let parsed: SymbolRequest = serde_json::from_slice(body).map_err(|_| "Invalid symbol request")?;
+    let query = parsed.query.trim();
+    if query.is_empty() || query.len() > 100 || query.chars().any(char::is_control) { return Err("Invalid symbol query"); }
+    Ok(query.to_owned())
+}
+
 fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
     let (mut messages, images) = parse_web_chat(body)?;
     let options: serde_json::Value = serde_json::from_slice(body).map_err(|_| "Invalid request")?;
@@ -173,7 +183,23 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
                 let root = std::env::current_dir().unwrap_or_default();
                 let catalog = plugins::catalog(&root);
                 let available = env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty());
-                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
+                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"symbolLookupAvailable":agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
+            }
+        },
+        ("POST", "/api/symbols") => {
+            if !request.is_same_origin_json() {
+                ("403 Forbidden", "application/json", br#"{"error":"Same-origin JSON request required"}"#.to_vec())
+            } else if let Ok(query) = parse_symbol_query(&request.body) {
+                if let Some(root) = agent_workspace() {
+                    match cli::web_symbols(&root, &query) {
+                        Ok(result) => ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&result).unwrap_or_default()),
+                        Err(error) => { eprintln!("Symbol lookup failed: {error}"); ("502 Bad Gateway", "application/json", br#"{"error":"Symbol lookup failed"}"#.to_vec()) },
+                    }
+                } else {
+                    ("503 Service Unavailable", "application/json", br#"{"error":"No server agent workspace is configured"}"#.to_vec())
+                }
+            } else {
+                ("400 Bad Request", "application/json", br#"{"error":"Invalid symbol query"}"#.to_vec())
             }
         },
         ("POST", "/api/changes") => {
@@ -306,6 +332,14 @@ mod web_chat_tests {
         assert!(parse_web_chat(&serde_json::to_vec(&invalid_image).unwrap()).is_err());
         let large = serde_json::json!({"messages":[{"role":"user","text":"test"}],"attachments":[{"name":"large.txt","kind":"text","text":"x".repeat(20481)}]});
         assert!(parse_web_chat(&serde_json::to_vec(&large).unwrap()).is_err());
+    }
+    #[test]
+    fn symbol_query_accepts_only_a_bounded_string() {
+        assert_eq!(parse_symbol_query(br#"{"query":" parser "}"#).unwrap(), "parser");
+        assert!(parse_symbol_query(br#"{"query":""}"#).is_err());
+        assert!(parse_symbol_query(br#"{"query":"ok","path":"/etc"}"#).is_err());
+        assert!(parse_symbol_query(br#"{"query":"bad\nvalue"}"#).is_err());
+        assert!(parse_symbol_query(serde_json::json!({"query":"x".repeat(101)}).to_string().as_bytes()).is_err());
     }
     #[test]
     fn agent_loop_requires_a_boolean_flag() {

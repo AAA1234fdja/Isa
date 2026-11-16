@@ -15,8 +15,13 @@ http.createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/api/chat-options') {
     const host=request.headers.host||'', origin=request.headers.origin||'', type=(request.headers['content-type']||'').split(';')[0].trim();
     if (!host || !['http://'+host,'https://'+host].includes(origin) || type !== 'application/json') return respond(response,403,'application/json','{"error":"Same-origin JSON request required"}');
-    try { const catalog=JSON.parse(await readFile(path.join(root,'plugins/catalog-preview.json'),'utf8')); return respond(response,200,'application/json',JSON.stringify({ollamaConfigured:false,pluginRuntime:false,catalog})); }
+    try { const catalog=JSON.parse(await readFile(path.join(root,'plugins/catalog-preview.json'),'utf8')); return respond(response,200,'application/json',JSON.stringify({ollamaConfigured:false,pluginRuntime:false,symbolLookupAvailable:false,catalog})); }
     catch { return respond(response,503,'application/json','{"error":"Plugin catalog unavailable"}'); }
+  }
+  if (request.method === 'POST' && url.pathname === '/api/symbols') {
+    const host=request.headers.host||'', origin=request.headers.origin||'', type=(request.headers['content-type']||'').split(';')[0].trim();
+    if (!host || !['http://'+host,'https://'+host].includes(origin) || type !== 'application/json') return respond(response,403,'application/json','{"error":"Same-origin JSON request required"}');
+    return respond(response,503,'application/json','{"error":"Symbol lookup requires the configured Rust server."}');
   }
   if (request.method === 'POST' && url.pathname === '/api/changes') {
     const host=request.headers.host||'', origin=request.headers.origin||'', type=(request.headers['content-type']||'').split(';')[0].trim();

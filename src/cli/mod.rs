@@ -448,6 +448,11 @@ pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, Str
     }
 }
 
+// Server workspace is selected by trusted configuration, never by the request.
+pub fn web_symbols(root: &std::path::Path, query: &str) -> Result<serde_json::Value> {
+    symbols::lookup(root, query)
+}
+
 // Diff access is read-only and only exposed by the server after explicit configuration.
 pub fn web_changes(root: &std::path::Path) -> Result<serde_json::Value> {
     let staged = repository::git_diff(root, true)?;

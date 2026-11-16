@@ -164,8 +164,16 @@ requests have a 120-second browser timeout; other custom-provider requests retai
 45 seconds. A failed node fails the pool; cancellation aborts browser requests
 but may not stop remote computation.
 
-The runner does not invoke tools, plugins, or the Rust harness, and does not
-provide sandboxing or autonomous file editing. A pool may make up to 16 model
+Pool agents do not invoke tools, plugins, or the Rust harness, and the runner does
+not provide sandboxing or autonomous file editing. Optionally, a chat can set a
+**Pool symbol context** query: after explicit per-message confirmation, ISA
+asks the configured Rust server to find matching declarations and sends up to
+15 symbol names, kinds, paths and line numbers to pool providers as untrusted
+context. The lookup is bounded and may be incomplete; failure stops the pool.
+It requires `ISA_WEB_AGENT_WORKSPACE`, not the browser folder picker, and is not
+used by goal or context-compression helpers. Results may expose sensitive project
+information. The same-origin endpoint is a development feature, not a security
+boundary against untrusted users of the server. A pool may make up to 16 model
 requests per message, can incur charges, and sends the chat history, message,
 attachments, and intermediate responses to its participating providers. Auto
 may also send the same data to multiple providers during fallback. ISA asks for
