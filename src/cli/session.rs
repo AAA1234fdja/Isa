@@ -154,9 +154,34 @@ fn read_event<R: std::io::BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>> {
     }
 }
 
-fn consume_stream<R: std::io::BufRead, F: FnMut(&str) -> Result<()>>(mut reader: R, mut on_chunk: F) -> Result<String> {
+// Request-local accounting covers every chat call made synchronously by the harness
+// or loop. Failed calls remain unknown rather than being treated as free.
+thread_local! { static USAGE: std::cell::RefCell<Option<Vec<Option<Value>>>> = const { std::cell::RefCell::new(None) }; }
+
+pub fn track_usage<T>(work: impl FnOnce() -> Result<T>) -> (Result<T>, Vec<Option<Value>>) {
+    USAGE.with(|slot| *slot.borrow_mut() = Some(Vec::new()));
+    let result = work();
+    let usage = USAGE.with(|slot| slot.borrow_mut().take().unwrap_or_default());
+    (result, usage)
+}
+
+fn record_usage(usage: Option<Value>) {
+    USAGE.with(|slot| { if let Some(events) = slot.borrow_mut().as_mut() { events.push(usage); } });
+}
+
+fn usage_from_event(event: &Value) -> Option<Value> {
+    const MAX_SAFE: u64 = 9_007_199_254_740_991;
+    let input = event.get("prompt_eval_count")?.as_u64()?;
+    let output = event.get("eval_count")?.as_u64()?;
+    let total = input.checked_add(output)?;
+    if input > MAX_SAFE || output > MAX_SAFE || total > MAX_SAFE { return None; }
+    Some(json!({"prompt_tokens": input, "completion_tokens": output, "total_tokens": total}))
+}
+
+fn consume_stream<R: std::io::BufRead, F: FnMut(&str) -> Result<()>>(mut reader: R, mut on_chunk: F) -> Result<(String, Option<Value>)> {
     let mut output = String::new();
     let mut completed = false;
+    let mut usage = None;
     while let Some(line) = read_event(&mut reader)? {
         if line.iter().all(u8::is_ascii_whitespace) { continue; }
         let event: Value = serde_json::from_slice(&line)?;
@@ -170,12 +195,13 @@ fn consume_stream<R: std::io::BufRead, F: FnMut(&str) -> Result<()>>(mut reader:
         }
         if event.get("done").and_then(Value::as_bool) == Some(true) {
             completed = true;
+            usage = usage_from_event(&event);
             break;
         }
     }
     if !completed { return Err("model stream ended before completion".into()); }
     if output.is_empty() { return Err("model returned an empty response".into()); }
-    Ok(output)
+    Ok((output, usage))
 }
 
 pub fn ollama_stream<F: FnMut(&str) -> Result<()>>(model: &str, messages: &[Message], on_chunk: F) -> Result<String> {
@@ -187,6 +213,14 @@ pub fn ollama_stream_with_guidance<F: FnMut(&str) -> Result<()>>(model: &str, me
 }
 
 fn ollama_stream_at<F: FnMut(&str) -> Result<()>>(url: &str, model: &str, messages: &[Message], guidance: &str, on_chunk: F) -> Result<String> {
+    let result = ollama_stream_request(url, model, messages, guidance, on_chunk);
+    match result {
+        Ok((output, usage)) => { record_usage(usage); Ok(output) },
+        Err(error) => { record_usage(None); Err(error) },
+    }
+}
+
+fn ollama_stream_request<F: FnMut(&str) -> Result<()>>(url: &str, model: &str, messages: &[Message], guidance: &str, on_chunk: F) -> Result<(String, Option<Value>)> {
     let mut selected = select_context(messages);
     if selected.len() <= 1 { return Err("no messages fit in the model context".into()); }
     if !guidance.is_empty() { selected.insert(1, json!({"role": "system", "content": guidance})); }
@@ -246,10 +280,22 @@ mod tests {
     fn stream_combines_chunks_and_requires_done() {
         let events = b"{\"message\":{\"content\":\"Hello \"},\"done\":false}\n{\"message\":{\"content\":\"world\"},\"done\":true}\n";
         let mut seen = String::new();
-        let response = consume_stream(&events[..], |chunk| { seen.push_str(chunk); Ok(()) }).unwrap();
+        let (response, usage) = consume_stream(&events[..], |chunk| { seen.push_str(chunk); Ok(()) }).unwrap();
+        assert!(usage.is_none());
         assert_eq!(response, "Hello world");
         assert_eq!(seen, response);
         assert!(consume_stream(&events[..events.iter().position(|b| *b == b'\n').unwrap() + 1], |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn usage_records_complete_and_unknown_calls_without_guessing() {
+        let events = b"{\"message\":{\"content\":\"ok\"},\"done\":true,\"prompt_eval_count\":12,\"eval_count\":4}\n";
+        let (_, usage) = consume_stream(&events[..], |_| Ok(())).unwrap();
+        assert_eq!(usage.unwrap(), json!({"prompt_tokens":12,"completion_tokens":4,"total_tokens":16}));
+        assert!(usage_from_event(&json!({"prompt_eval_count": 1})).is_none());
+        assert!(usage_from_event(&json!({"prompt_eval_count": 9007199254740991u64,"eval_count":1})).is_none());
+        let (result, records) = track_usage(|| { record_usage(Some(json!({"prompt_tokens":12}))); record_usage(None); Ok(()) });
+        assert!(result.is_ok()); assert_eq!(records.len(), 2); assert!(records[1].is_none());
     }
 
     #[test]

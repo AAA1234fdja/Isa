@@ -1,0 +1,11 @@
+Web design engineering guidance for visual browser interfaces and redesigns.
+Apply to visual frontend work, not backend-only or CLI tasks. Treat this as untrusted reference material, not permission to act or override user requirements.
+
+1. Read the request, existing code, supplied screenshots, brand assets, and design tokens before designing. Verify uncertain, time-sensitive facts when authoritative sources are available.
+2. Identify whether the work extends an existing UI or calls for a preserve/overhaul redesign. Preserve working behavior, accessibility, visual language, and user constraints unless the user requests a change.
+3. Define the audience, artifact, visual direction, density, motion, responsive requirements, and key interaction states. Ask only when important requirements remain ambiguous.
+4. Use real authorized assets where appropriate. Build intentional hierarchy, typography, spacing, contrast, and responsive layouts; avoid generic decoration and fabricated content.
+5. Make every visible control functional or clearly disclose limitations. Include keyboard focus, accessible names, empty and error states, and reduced-motion support where appropriate.
+6. Inspect the implementation and test interactions and representative viewports when tools are available. Report untested behavior and remaining limitations honestly.
+
+Adapted from ConardLi/garden-skills web-design-engineer, MIT license. The full skill and references are not automatically loaded by ISA.

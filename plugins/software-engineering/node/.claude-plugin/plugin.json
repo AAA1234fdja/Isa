@@ -1,0 +1,22 @@
+{
+  "name": "node",
+  "description": "Collection of agents, commands and skills for Node",
+  "version": "1.0.1",
+  "license": "MIT",
+  "category": "backend",
+  "tags": [
+    "node",
+    "nodejs",
+    "javascript",
+    "typescript",
+    "express",
+    "auth",
+    "testing",
+    "playwright",
+    "fullstack",
+    "backend-patterns"
+  ],
+  "author": {
+    "name": "Wesley Egberto"
+  }
+}
