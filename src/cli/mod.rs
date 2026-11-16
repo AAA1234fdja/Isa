@@ -1,5 +1,6 @@
 mod connectors;
 mod context;
+mod semantic;
 mod edit;
 mod registry;
 mod repository;
@@ -19,6 +20,8 @@ Usage:\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
+  isa-cli semantic-index <model> [directory] Build local embedding index\n\
+  isa-cli semantic-search <query> [directory] Search the embedding index\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
@@ -93,6 +96,16 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let staged = args.get(1).is_some_and(|arg| arg == "--staged");
             let root = directory(&args, if staged { 2 } else { 1 })?;
             print!("{}", repository::git_diff(&root, staged)?);
+        }
+        Some("semantic-index") => {
+            let model = argument(&args, 1, "embedding model")?;
+            let root = directory(&args, 2)?;
+            semantic::build(&root, &model)?;
+        }
+        Some("semantic-search") => {
+            let query = argument(&args, 1, "query")?;
+            let root = directory(&args, 2)?;
+            println!("{}", serde_json::to_string_pretty(&semantic::search(&root, &query)?)?);
         }
         Some("rank") => {
             let query = argument(&args, 1, "query")?;

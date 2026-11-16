@@ -120,3 +120,14 @@ GitHub CLI authorization and planned Google Drive, Gmail, and Notion integration
 ## Settings
 
 The Settings screen groups functional controls into Appearance, Chat, and Data. Appearance stores the light/dark/system mode, an ISA green workspace palette, interface scale, and reduced-motion preference in the browser. Chat controls regional date formatting. Data can export or delete browser-local chats; exports include attached text. These preferences and conversations are not synchronized between devices or connected to CLI profiles.
+
+## Local semantic indexing
+
+The CLI can index workspace text with real local Ollama embeddings and search chunks by cosine similarity. Install and start Ollama on `127.0.0.1:11434`, then pull an embedding model, for example `ollama pull nomic-embed-text`:
+
+```sh
+isa-cli semantic-index nomic-embed-text /path/to/workspace
+isa-cli semantic-search "where are user sessions saved?" /path/to/workspace
+```
+
+The index is stored in `.isa/semantic-index.json`, ignored by this repository's `.gitignore`, and contains source excerpts and embeddings in plaintext. Protect it as sensitive project data and exclude `.isa/` in other repositories. Indexing respects ignore rules and the CLI's excluded paths, skips binary and large files, and limits index size; it cannot reliably identify every secret embedded in source files. Review your workspace and ignore rules before indexing. Source text is sent to the local Ollama service, not an external provider. Output includes paths, line ranges, similarity scores, and excerpts marked as untrusted. Deleted, ignored, or changed chunks are omitted from searches until the index is rebuilt; rebuild after edits to include new content. Unchanged chunks are reused when the model digest matches. Changing the installed model requires rebuilding. This is CLI-only: the web UI and agent do not yet consume this index. `rank` and `pack` remain lexical.
