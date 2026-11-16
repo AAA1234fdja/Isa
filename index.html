@@ -125,8 +125,6 @@ let chats=[];
 let activeChatId=null;
 const pendingChats=new Map();
 let region='US';try{const savedRegion=localStorage.getItem('isa.region');if(savedRegion==='CO'||savedRegion==='US')region=savedRegion}catch(error){}
-// The decoy is used only when no real provider is configured.
-const configuredProvider=null;
 try { const saved=JSON.parse(localStorage.getItem(chatStorageKey)||'[]'); if(Array.isArray(saved)) chats=saved.filter(chat=>chat && typeof chat.id==='string' && typeof chat.title==='string' && Array.isArray(chat.messages)).map(chat=>({...chat,messages:chat.messages.filter(message=>message && typeof message.text==='string' && typeof message.at==='string' && !Number.isNaN(Date.parse(message.at)))})); } catch(error){notice('Could not load saved chats.');}
 function saveChats(next){try{localStorage.setItem(chatStorageKey,JSON.stringify(next));chats=next;return true}catch(error){notice('Could not save your chat in this browser.');return false}}
 function localDay(date){return date.getFullYear()+'-'+String(date.getMonth()+1).padStart(2,'0')+'-'+String(date.getDate()).padStart(2,'0')}
@@ -151,19 +149,21 @@ async function send(){
   if(!text&&!attachments.length){promptBox.focus();return}
   if(text.startsWith('./')){const utility=/^\.\/(help|resume-(ac|lp))\/\.$/i.test(text);if(attachments.length&&!utility){notice('Remove attachments before running a command.');return}if(runChatCommand(text))promptBox.value='';return}
   if(activeChatId&&pendingChats.has(activeChatId)){notice('Wait for the current response before sending another message.');return}
-  if(configuredProvider!==null){notice('The configured provider is not connected. The decoy will not be used as a fallback.');return}
+  if(attachments.length){notice('Attachments are not yet supported by the model API. Remove them before sending.');return}
+  if(new TextEncoder().encode(text).length>65536){notice('Message exceeds the 64 KiB limit.');return}
   const now=new Date().toISOString();const message={role:'user',text,at:now,attachments:attachments.map(file=>({name:file.name,text:file.text}))};const existing=chats.find(chat=>chat.id===activeChatId);const chat=existing?{...existing,messages:[...existing.messages,message]}:{id:Date.now().toString(36)+'-'+Math.random().toString(36).slice(2),title:(text||attachments[0].name).slice(0,60),messages:[message]};const next=[chat,...chats.filter(item=>item.id!==chat.id)];if(!saveChats(next))return;
   const controller=new AbortController(),started=performance.now();promptBox.value='';clearAttachments();pendingChats.set(chat.id,controller);openChat(chat.id);renderActivity();let reply;
   try{
-    const response=await fetch('/api/decoy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text||'Text attachments were selected.'}),signal:controller.signal});
+    const history=[];let used=0;const encoder=new TextEncoder();for(const item of [...chat.messages].reverse()){if(item.error||!['user','assistant'].includes(item.role)||!item.text.trim())continue;const bytes=encoder.encode(item.text).length;if(bytes>65536||used+bytes>80000||history.length>=20)break;history.unshift({role:item.role,text:item.text});used+=bytes}
+    const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,messages:history}),signal:controller.signal});
     const data=await response.json();
-    if(data.provider==='decoy'&&data.role==='assistant'&&typeof data.error?.message==='string'&&data.error.message.length<=65536){reply={text:data.error.message,error:true}}
-    else if(response.ok&&data.provider==='decoy'&&data.role==='assistant'&&typeof data.content==='string'&&data.content.trim()&&data.content.length<=65536){reply={text:data.content,error:false}}
+    if(['decoy','ollama'].includes(data.provider)&&data.role==='assistant'&&typeof data.error?.message==='string'&&data.error.message.length<=65536){reply={text:data.error.message,error:true,provider:data.provider}}
+    else if(response.ok&&data.provider==='ollama'&&data.role==='assistant'&&typeof data.content==='string'&&data.content.trim()&&data.content.length<=65536){reply={text:data.content,error:false,provider:data.provider}}
     else throw new Error('Invalid provider response');
   }catch(error){reply=error.name==='AbortError'?{text:'Request stopped.',error:false}:{text:'Could not reach the provider. Make sure the local provider service is running.',error:true}}
   finally{
     pendingChats.delete(chat.id);const current=chats.find(item=>item.id===chat.id);
-    if(current&&reply){const finished={role:'assistant',provider:'decoy',text:reply.text,error:reply.error,at:new Date().toISOString(),durationMs:Math.max(0,Math.round(performance.now()-started))};const updated={...current,messages:[...current.messages,finished]};if(!saveChats(chats.map(item=>item.id===chat.id?updated:item)))notice('The response could not be saved.');}
+    if(current&&reply){const finished={role:'assistant',provider:reply.provider||'unknown',text:reply.text,error:reply.error,at:new Date().toISOString(),durationMs:Math.max(0,Math.round(performance.now()-started))};const updated={...current,messages:[...current.messages,finished]};if(!saveChats(chats.map(item=>item.id===chat.id?updated:item)))notice('The response could not be saved.');}
     if(activeChatId===chat.id&&!thread.hidden){const panels=Array.from(thread.querySelectorAll('.help-response'));openChat(chat.id);thread.append(...panels)}updateSendButton();renderActivity()
   }
 }

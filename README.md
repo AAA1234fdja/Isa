@@ -133,3 +133,13 @@ isa-cli semantic-search "where are user sessions saved?" /path/to/workspace
 The index is stored in `.isa/semantic-index.json`, ignored by this repository's `.gitignore`, and contains source excerpts and embeddings in plaintext. Protect it as sensitive project data and exclude `.isa/` in other repositories. Indexing respects ignore rules and the CLI's excluded paths, skips binary and large files, and limits index size; it cannot reliably identify every secret embedded in source files. Review your workspace and ignore rules before indexing. Source text is sent to the local Ollama service, not an external provider. Output includes paths, line ranges, similarity scores, and excerpts marked as untrusted. Deleted, ignored, or changed chunks are omitted from searches until the index is rebuilt; rebuild after edits to include new content. Unchanged chunks are reused when the model digest matches. Changing the installed model requires rebuilding. This is CLI-only: the web UI and agent do not yet consume this index. `rank` and `pack` remain lexical.
 
 The CLI's initial response adaptation harness is documented in [Harness Isa](Harness%20Isa/README.md). It is inspired by the propose–probe–compose pattern in Harness², not an integration of the upstream research framework. Set `ISA_HARNESS=0` to disable its extra model calls.
+
+### Browser chat with the response harness
+
+The Rust web server can explicitly use a local Ollama model for browser chat:
+
+```sh
+ISA_WEB_MODEL=llama3.2 cargo run --bin isa
+```
+
+Start Ollama and pull the specified model first. The browser sends recent text messages to the same-origin `/api/chat` endpoint; the server invokes the Rust response harness and local Ollama. Without `ISA_WEB_MODEL`, requests go to the decoy and return the no-provider error, not a fabricated answer. `ISA_HARNESS=0` disables the extra probe calls. The Node development preview only supports the decoy, not the real model endpoint. Attached files are not yet supported for model calls. Stop cancels the browser request but does not yet cancel an in-progress Ollama computation on the server. Do not expose this unauthenticated local server to untrusted networks: same-origin checks are not a substitute for authentication, especially behind a public preview proxy. No API credentials are needed for the local model.

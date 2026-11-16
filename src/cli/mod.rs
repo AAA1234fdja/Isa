@@ -352,3 +352,13 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
     }
     Ok(())
 }
+
+// The browser server passes only validated conversation roles to this entry point.
+pub fn web_response(model: &str, entries: &[(String, String)]) -> Result<String> {
+    let messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
+    if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
+        session::ollama_stream(model, &messages, |_| Ok(()))
+    } else {
+        harness::respond(model, &messages, |_| Ok(()))
+    }
+}

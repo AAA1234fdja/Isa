@@ -1,5 +1,7 @@
 use std::env;
 mod http;
+#[allow(dead_code)]
+mod cli;
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
@@ -7,6 +9,7 @@ use std::net::{TcpListener, TcpStream};
 // Embedded assets are a fallback when running outside the project directory.
 const INTERFACE: &str = include_str!("../index.html");
 const LOGO: &[u8] = include_bytes!("../assets/isa-logo.png");
+const TRANSPARENT_LOGO: &[u8] = include_bytes!("../assets/isa-logo-transparent.png");
 
 // Decode query parameters without treating user input as a URL or a filesystem path.
 fn decode_query(value: &str) -> Option<String> {
@@ -41,6 +44,26 @@ fn search_extensions(query: &str) -> Result<Vec<u8>, String> {
     serde_json::to_vec(&data).map_err(|e| e.to_string())
 }
 
+fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
+    let value: serde_json::Value = serde_json::from_slice(body).map_err(|_| "Invalid request")?;
+    let entries = value.get("messages").and_then(|v| v.as_array()).ok_or("Messages are required")?;
+    if entries.is_empty() || entries.len() > 20 { return Err("Expected 1 to 20 messages"); }
+    let mut messages = Vec::new();
+    let mut total = 0usize;
+    for entry in entries {
+        let role = entry.get("role").and_then(|v| v.as_str()).ok_or("Invalid role")?;
+        let text = entry.get("text").and_then(|v| v.as_str()).ok_or("Invalid message")?;
+        if !matches!(role, "user" | "assistant") || text.trim().is_empty() || text.len() > 64 * 1024 { return Err("Invalid message"); }
+        total += text.len();
+        if total > 96 * 1024 { return Err("Conversation exceeds context limit"); }
+        messages.push((role.to_owned(), text.to_owned()));
+    }
+    if messages.last().map(|m| m.0.as_str()) != Some("user") { return Err("Last message must be from the user"); }
+    let reply = cli::web_response(model, &messages).map_err(|error| { eprintln!("Local model request failed: {error}"); "Local Ollama request failed. Check that the configured model is available." })?;
+    if reply.len() > 65536 { return Err("Model response exceeded the limit"); }
+    serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":reply})).map_err(|_| "Could not encode response")
+}
+
 fn handle_request(mut stream: TcpStream) -> io::Result<()> {
     let request = match http::read_request(&mut stream) {
         Ok(request) => request,
@@ -53,7 +76,18 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
-        ("POST", "/api/decoy") => {
+        ("POST", "/api/chat") if env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty()) => {
+            if !request.is_same_origin_json() {
+                ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
+            } else {
+                let model = env::var("ISA_WEB_MODEL").unwrap_or_default();
+                match web_chat(&request.body, &model) {
+                    Ok(body) => ("200 OK", "application/json; charset=utf-8", body),
+                    Err(message) => ("502 Bad Gateway", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","error":{"message":message}})).unwrap_or_default()),
+                }
+            }
+        },
+        ("POST", "/api/chat" | "/api/decoy") => {
             if !request.is_same_origin_json() {
                 ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
             } else {
@@ -101,6 +135,9 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("GET" | "HEAD", "/assets/providers/vercel.svg") => ("200 OK", "image/svg+xml", include_bytes!("../assets/providers/vercel.svg").to_vec()),
         ("GET" | "HEAD", "/assets/providers/dropbox.svg") => ("200 OK", "image/svg+xml", include_bytes!("../assets/providers/dropbox.svg").to_vec()),
         ("GET" | "HEAD", "/assets/providers/google-calendar.svg") => ("200 OK", "image/svg+xml", include_bytes!("../assets/providers/google-calendar.svg").to_vec()),
+        ("GET" | "HEAD", "/assets/isa-logo-transparent.png") => (
+            "200 OK", "image/png", std::fs::read("assets/isa-logo-transparent.png").unwrap_or_else(|_| TRANSPARENT_LOGO.to_vec()),
+        ),
         ("GET" | "HEAD", "/assets/isa-logo.png") => (
             "200 OK", "image/png",
             std::fs::read("assets/isa-logo.png").unwrap_or_else(|_| LOGO.to_vec()),
@@ -128,4 +165,16 @@ fn main() -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod web_chat_tests {
+    use super::*;
+    #[test]
+    fn rejects_invalid_conversation_before_model_call() {
+        assert!(web_chat(br#"{"messages":[{"role":"system","text":"test"}]}"#, "model").is_err());
+        assert!(web_chat(br#"{"messages":[{"role":"assistant","text":"test"}]}"#, "model").is_err());
+        assert!(web_chat(br#"{"messages":[]}"#, "model").is_err());
+        assert!(web_chat(b"invalid", "model").is_err());
+    }
 }

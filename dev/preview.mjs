@@ -12,7 +12,7 @@ function respond(response, status, type, body, head = false) {
 }
 http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
-  if (request.method === 'POST' && url.pathname === '/api/decoy') {
+  if (request.method === 'POST' && (url.pathname === '/api/decoy' || url.pathname === '/api/chat')) {
     const host = request.headers.host || '';
     const origin = request.headers.origin || '';
     const contentType = (request.headers['content-type'] || '').split(';')[0].trim();
@@ -33,7 +33,7 @@ http.createServer(async (request, response) => {
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') return respond(response, 405, 'text/plain', 'Method not allowed');
   const file = url.pathname === '/' ? '/index.html' : url.pathname;
-  if (file !== '/index.html' && file !== '/assets/isa-logo.png' && !/^\/assets\/providers\/[a-z-]+\.svg$/.test(file)) return respond(response, 404, 'text/plain', 'Not found');
+  if (file !== '/index.html' && file !== '/assets/isa-logo.png' && file !== '/assets/isa-logo-transparent.png' && !/^\/assets\/providers\/[a-z-]+\.svg$/.test(file)) return respond(response, 404, 'text/plain', 'Not found');
   try {
     const body = await readFile(path.join(root, file));
     respond(response, 200, types[path.extname(file)] || 'application/octet-stream', body, request.method === 'HEAD');
