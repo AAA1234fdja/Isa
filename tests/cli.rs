@@ -177,3 +177,35 @@ fn listing_and_editing_do_not_follow_symlinks() {
     assert!(!edit.status.success());
     assert_eq!(fs::read_to_string(outside.path().join("secret.txt")).unwrap(), "outside value");
 }
+
+#[test]
+fn context_pack_outputs_json_and_marks_sources_untrusted() {
+    let workspace = Workspace::new();
+    workspace.write("auth.rs", "fn authenticate() { token(); }\n");
+    let output = cli(&["pack", "token"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let packed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(packed["sources_are_untrusted"], true);
+    assert_eq!(packed["sources"][0]["path"], "auth.rs");
+}
+
+#[test]
+fn session_search_is_case_insensitive() {
+    let workspace = Workspace::new();
+    workspace.write(".isa/sessions/example.json", r#"{"version":1,"messages":[{"role":"user","content":"Hello ISA"}]}"#);
+    let output = cli(&["session-search", "hello"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("example [user] Hello ISA"));
+}
+
+#[test]
+fn context_pack_ignores_gitignored_files() {
+    let workspace = Workspace::new();
+    workspace.write(".gitignore", "hidden.txt\n");
+    workspace.write("hidden.txt", "needle in a secret file");
+    workspace.write("public.txt", "needle in public file");
+    let output = cli(&["pack", "needle"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("public.txt"));
+    assert!(!stdout(&output).contains("hidden.txt"));
+}

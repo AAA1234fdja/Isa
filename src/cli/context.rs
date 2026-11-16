@@ -96,3 +96,58 @@ mod tests {
         assert!(rank(Path::new("."), "!", 10).is_err());
     }
 }
+
+const MAX_PACK_CHARS: usize = 12_000;
+const MAX_PACK_FILES: usize = 12;
+
+pub fn pack(root: &Path, query: &str) -> Result<serde_json::Value> {
+    let results = rank(root, query, MAX_PACK_FILES)?;
+    let mut remaining = MAX_PACK_CHARS;
+    let mut sources = Vec::new();
+    for result in results {
+        let path = result.path.to_string_lossy().into_owned();
+        let overhead = path.chars().count();
+        if overhead >= remaining { break; }
+        remaining -= overhead;
+        let excerpt: String = result.excerpt.chars().take(remaining).collect();
+        remaining -= excerpt.chars().count();
+        sources.push(serde_json::json!({
+            "path": path,
+            "score": result.score,
+            "excerpt": excerpt,
+        }));
+        if remaining == 0 { break; }
+    }
+    Ok(serde_json::json!({
+        "version": 1,
+        "method": "lexical",
+        "query": query,
+        "sources_are_untrusted": true,
+        "sources": sources,
+    }))
+}
+
+#[cfg(test)]
+mod pack_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn pack_limits_sources_and_marks_them_untrusted() {
+        let path = std::env::temp_dir().join(format!("isa-pack-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("one.rs"), "fn token_example() { token(); }\n").unwrap();
+        let packed = pack(&path, "token").unwrap();
+        assert_eq!(packed["method"], "lexical");
+        assert_eq!(packed["sources_are_untrusted"], true);
+        assert_eq!(packed["sources"].as_array().unwrap().len(), 1);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn pack_rejects_empty_query() {
+        assert!(pack(Path::new("."), "?").is_err());
+    }
+}

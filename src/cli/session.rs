@@ -217,3 +217,35 @@ mod tests {
         assert!(load(&root, "new").unwrap().is_empty());
     }
 }
+
+pub struct SessionHit {
+    pub id: String,
+    pub role: String,
+    pub excerpt: String,
+}
+
+pub fn search(root: &Path, query: &str) -> Result<Vec<SessionHit>> {
+    if query.trim().is_empty() { return Err("search text cannot be empty".into()); }
+    if query.len() > 4096 { return Err("search text exceeds the size limit".into()); }
+    let needle = query.to_lowercase();
+    let mut hits = Vec::new();
+    for id in list(root)?.into_iter().take(1000) {
+        let messages = match load(root, &id) {
+            Ok(messages) => messages,
+            Err(error) => {
+                eprintln!("Skipped unreadable session {id}: {error}");
+                continue;
+            }
+        };
+        for message in messages {
+            if message.content.to_lowercase().contains(&needle) {
+                let excerpt: String = message.content.chars().take(240).map(|c| {
+                    if c == '\n' || c == '\t' || !c.is_control() { c } else { '�' }
+                }).collect();
+                hits.push(SessionHit { id: id.clone(), role: message.role, excerpt });
+                if hits.len() >= 100 { return Ok(hits); }
+            }
+        }
+    }
+    Ok(hits)
+}

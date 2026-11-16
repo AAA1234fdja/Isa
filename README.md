@@ -35,6 +35,8 @@ cargo run --bin isa-cli -- files .
 cargo run --bin isa-cli -- search "TODO" .
 cargo run --bin isa-cli -- context .
 cargo run --bin isa-cli -- rank "authentication handler" .
+cargo run --bin isa-cli -- pack "authentication handler" .
+cargo run --bin isa-cli -- session-search "authentication" .
 cargo run --bin isa-cli -- replace path/to/file "old text" "new text" .
 cargo run --bin isa-cli -- undo .
 cargo run --bin isa-cli -- chat my-session .
@@ -55,3 +57,5 @@ Semantic indexing, AST-aware context, model tool calling, agent-driven editing, 
 - [MCP transports](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
 
 The Ollama chat streams responses to the terminal. `ask` runs one request without an interactive prompt and exits nonzero on failure; it does not execute agent tools. A user message is saved before the request, while an assistant message is saved only after the stream completes. Partial responses are not saved.
+
+`pack` creates a bounded JSON context bundle using lexical ranking, not embeddings. Repository snippets are untrusted input and must not be treated as instructions. It does not transmit the bundle to a model; review sensitive contents before sharing it. `session-search` searches locally saved CLI sessions.

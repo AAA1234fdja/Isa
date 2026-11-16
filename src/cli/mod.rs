@@ -15,9 +15,11 @@ Usage:\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
+  isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli sessions [directory]              List saved sessions\n\
+  isa-cli session-search <text> [directory] Search local session messages\n\
   isa-cli history <session-id> [directory]  Show a saved session\n\
   isa-cli chat <session-id> [directory]     Chat with a local Ollama model\n\
   isa-cli ask <session-id> <prompt> [directory]  Run one local model request\n\n\
@@ -84,6 +86,12 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 println!("{} ({:.3})\n{}\n", result.path.display(), result.score, result.excerpt);
             }
         }
+        Some("pack") => {
+            let query = argument(&args, 1, "query")?;
+            let root = directory(&args, 2)?;
+            let packed = context::pack(&root, &query)?;
+            println!("{}", serde_json::to_string_pretty(&packed)?);
+        }
         Some("replace") => {
             let file = argument(&args, 1, "file")?;
             let old = argument(&args, 2, "search text")?;
@@ -100,6 +108,15 @@ pub fn run(args: Vec<String>) -> Result<()> {
             for id in session::list(&root)? {
                 println!("{id}");
             }
+        }
+        Some("session-search") => {
+            let query = argument(&args, 1, "search text")?;
+            let root = directory(&args, 2)?;
+            let matches = session::search(&root, &query)?;
+            for hit in &matches {
+                println!("{} [{}] {}", hit.id, hit.role, hit.excerpt);
+            }
+            eprintln!("{} match(es)", matches.len());
         }
         Some("history") => {
             let id = argument(&args, 1, "session ID")?;
