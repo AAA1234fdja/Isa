@@ -152,3 +152,18 @@ fn endpoint_reports_only_bounded_whitespace_hint_locations() {
     assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), original);
     assert!(!server.workspace.join(".isa").exists());
 }
+
+#[test]
+fn endpoint_identifies_duplicate_exact_matches_without_source_text() {
+    let server = Server::start(true);
+    let original = "private context\nold\nother\nold\n";
+    fs::write(server.workspace.join("source.txt"), original).unwrap();
+    let (status, body) = server.json(serde_json::json!({"proposal":proposal("source.txt", "old", "new")}));
+    assert_eq!(status, 422); let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["hints"]["kind"], "exact");
+    assert_eq!(value["hints"]["candidates"][0]["startLine"], 2);
+    assert_eq!(value["hints"]["candidates"][1]["startLine"], 4);
+    assert!(!body.contains("private context")); assert!(!body.contains("other"));
+    assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), original);
+    assert!(!server.workspace.join(".isa").exists());
+}

@@ -308,8 +308,8 @@ function openEditProposal(){
 }
 document.querySelector('#proposeEditButton').onclick=openEditProposal;
 function showWhitespaceHints(output,hints){
-  if(!hints||!['checked','too_large'].includes(hints.status))return;
-  const section=node('section','review-hints');section.append(node('h3','','Possible whitespace-only matches'),node('p','','Approximate locations only. These can be misleading and cannot be applied automatically. Inspect the file and correct the SEARCH text yourself.'));
+  if(!hints||!['checked','too_large'].includes(hints.status)||!['exact','whitespace'].includes(hints.kind))return;
+  const exact=hints.kind==='exact',section=node('section','review-hints');section.append(node('h3','',exact?'Multiple exact matches':'Possible whitespace-only matches'),node('p','',exact?'More than one exact match was found, including possible overlaps. Add enough context to SEARCH to make it unique; ISA will not choose a match.':'Approximate locations only. These can be misleading and cannot be applied automatically. Inspect the file and correct the SEARCH text yourself.'));
   if(hints.status==='too_large')section.append(node('p','','Hints skipped: file exceeds 64 KiB.'));
   else if(Array.isArray(hints.candidates)){const valid=hints.candidates.slice(0,5).filter(item=>item&&Number.isSafeInteger(item.startLine)&&item.startLine>0&&Number.isSafeInteger(item.endLine)&&item.endLine>=item.startLine);if(valid.length){const list=node('ul');for(const item of valid)list.append(node('li','','Line '+item.startLine+(item.endLine===item.startLine?'':'–'+item.endLine)));section.append(list)}else section.append(node('p','','No candidates found. This does not rule out other similar text.'));if(hints.truncated===true||hints.candidates.length>5||valid.length!==hints.candidates.length)section.append(node('p','','Locations may be incomplete.'))}
   output.append(section)

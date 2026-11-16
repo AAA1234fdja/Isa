@@ -163,10 +163,11 @@ impl std::fmt::Display for PreviewError {
         write!(f, "{}", self.message)?;
         if let Some(hints) = &self.hints {
             if hints["status"] == "checked" {
-                write!(f, " Whitespace-normalized candidate lines (not exact matches):")?;
+                if hints["kind"] == "exact" { write!(f, " Exact match candidate lines (choose a longer unique SEARCH):")?; }
+                else { write!(f, " Whitespace-normalized candidate lines (not exact matches):")?; }
                 if let Some(lines) = hints["candidates"].as_array() { for item in lines { write!(f, " {}-{}", item["startLine"], item["endLine"])?; } }
                 if hints["truncated"] == true { write!(f, " (more may exist)")?; }
-            } else { write!(f, " Whitespace hints unavailable for files over 64 KiB.")?; }
+            } else { write!(f, " Match locations unavailable for files over 64 KiB.")?; }
         }
         Ok(())
     }
@@ -177,7 +178,7 @@ impl PreviewError { pub fn json(&self) -> Value { json!({"error":self.message, "
 // Only locations are returned, never source snippets. This is deliberately not
 // a fuzzy edit: collapsing whitespace can identify misleading partial matches.
 fn whitespace_hints(source: &str, search: &str) -> Value {
-    if source.len() > 64 * 1024 { return json!({"status":"too_large"}); }
+    if source.len() > 64 * 1024 { return json!({"kind":"whitespace","status":"too_large"}); }
     fn normalize(text: &str) -> (String, Vec<usize>) {
         let mut out = String::new(); let mut lines = Vec::new(); let mut line = 1usize; let mut whitespace = false;
         for ch in text.chars() {
@@ -192,7 +193,7 @@ fn whitespace_hints(source: &str, search: &str) -> Value {
     }
     let (haystack, positions) = normalize(source);
     let (needle, _) = normalize(search.trim());
-    if needle.is_empty() { return json!({"status":"checked","candidates":[],"truncated":false}); }
+    if needle.is_empty() { return json!({"kind":"whitespace","status":"checked","candidates":[],"truncated":false}); }
     let mut candidates = Vec::new(); let mut start = 0; let mut truncated = false;
     while start < haystack.len() {
         let Some(offset) = haystack[start..].find(&needle) else { break };
@@ -201,7 +202,33 @@ fn whitespace_hints(source: &str, search: &str) -> Value {
         candidates.push(json!({"startLine":positions[found],"endLine":positions[found + needle.len() - 1]}));
         start = found + haystack[found..].chars().next().unwrap().len_utf8();
     }
-    json!({"status":"checked","candidates":candidates,"truncated":truncated})
+    json!({"kind":"whitespace","status":"checked","candidates":candidates,"truncated":truncated})
+}
+
+fn exact_hints(source: &str, search: &str) -> Value {
+    if source.len() > 64 * 1024 { return json!({"kind":"exact","status":"too_large"}); }
+    let mut candidates = Vec::new(); let mut start = 0usize; let mut truncated = false;
+    while start < source.len() {
+        let Some(offset) = source[start..].find(search) else { break };
+        let found = start + offset;
+        if candidates.len() == 5 { truncated = true; break; }
+        let line = 1 + source[..found].bytes().filter(|b| *b == b'\n').count();
+        let end = line + search.bytes().take(search.len().saturating_sub(1)).filter(|b| *b == b'\n').count();
+        candidates.push(json!({"startLine":line,"endLine":end}));
+        start = found + source[found..].chars().next().unwrap().len_utf8();
+    }
+    json!({"kind":"exact","status":"checked","candidates":candidates,"truncated":truncated})
+}
+
+fn mismatch_diagnostic(before: &str, old: &str, new: &str) -> Option<PreviewError> {
+    if old.is_empty() || old.chars().chain(new.chars()).any(unsafe_for_review) || old.chars().count() > 4000 || new.chars().count() > 4000 { return None; }
+    match before.find(old) {
+        None => Some(PreviewError { message: "Search text has no exact match. Suggestions are approximate and cannot be applied automatically.", hints: Some(whitespace_hints(before, old)) }),
+        Some(first) => {
+            let next = first + before[first..].chars().next()?.len_utf8();
+            if before[next..].contains(old) { Some(PreviewError { message: "Search text matches more than once, including possible overlaps. Expand it to select a unique match.", hints: Some(exact_hints(before, old)) }) } else { None }
+        }
+    }
 }
 
 // Read-only review: returns only the submitted block plus match metadata. It
@@ -213,11 +240,10 @@ pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Valu
     let before = read_target(&target).map_err(|_| "Target must be a readable UTF-8 text file without NUL and at most 1 MiB.")?;
     let (after, line) = match checked_replacement(&before, old, new) {
         Ok(result) => result,
-        Err(_) if before.find(old).is_none() && old.chars().count() <= 4000 && new.chars().count() <= 4000 => {
+        Err(_) => {
             if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review.".into()); }
-            return Err(PreviewError { message: "Search text has no exact match. Suggestions are approximate and cannot be applied automatically.", hints: Some(whitespace_hints(&before, old)) });
+            return Err(mismatch_diagnostic(&before, old, new).unwrap_or_else(|| "The search must match exactly once and the replacement must be valid and within the size limits.".into()));
         }
-        Err(_) => return Err("The search must match exactly once and the replacement must be valid and within the size limits.".into()),
     };
     if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review.".into()); }
     let syntax = symbols::compare_syntax(Path::new(file), &before, &after);
@@ -248,10 +274,7 @@ fn replace_with_approval(root: &Path, relative: &Path, old: &str, new: &str, exp
     if expected.is_some_and(|snapshot| snapshot != before.as_str()) { return Err("file changed since it was sent to the model; refusing stale proposal".into()); }
     let (after, _) = match checked_replacement(&before, old, new) {
         Ok(result) => result,
-        Err(_) if !old.is_empty() && old.chars().chain(new.chars()).all(|ch| !unsafe_for_review(ch)) && old.chars().count() <= 4000 && new.chars().count() <= 4000 && !before.contains(old) => {
-            return Err(Box::new(PreviewError { message: "Search text has no exact match. Suggestions are approximate and cannot be applied automatically.", hints: Some(whitespace_hints(&before, old)) }));
-        }
-        Err(error) => return Err(error),
+        Err(error) => return match mismatch_diagnostic(&before, old, new) { Some(diagnostic) => Err(Box::new(diagnostic)), None => Err(error) },
     };
     println!("File: {}\n--- remove ---\n{}\n--- add ---\n{}", relative.display(), visible(old), visible(new));
     print!("{}", syntax_advisory(&symbols::compare_syntax(relative, &before, &after)));
@@ -473,8 +496,21 @@ mod tests {
         assert!(whitespace_hints("anything", "  ")["candidates"].as_array().unwrap().is_empty());
         fs::write(&file, "old old").unwrap();
         let duplicate = preview_proposal(&root, "File: a.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE").unwrap_err();
-        assert!(duplicate.json()["hints"].is_null());
+        assert_eq!(duplicate.json()["hints"]["kind"], "exact");
+        assert_eq!(duplicate.json()["hints"]["candidates"].as_array().unwrap().len(), 2);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exact_match_hints_include_overlaps_and_line_ranges() {
+        let hints = exact_hints("start\naaa\nééé\nend", "aa");
+        assert_eq!(hints["candidates"].as_array().unwrap().len(), 2);
+        assert_eq!(hints["candidates"][0]["startLine"], 2);
+        assert_eq!(exact_hints("ééé", "éé")["candidates"].as_array().unwrap().len(), 2);
+        let multi = exact_hints("a\nb\na\nb\n", "a\nb\n");
+        assert_eq!(multi["candidates"][0]["startLine"], 1); assert_eq!(multi["candidates"][0]["endLine"], 2);
+        assert_eq!(exact_hints("aaaaaaa", "a")["truncated"], true);
+        assert_eq!(exact_hints(&"a".repeat(65537), "a")["status"], "too_large");
     }
 
     #[test]

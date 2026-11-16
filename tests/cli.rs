@@ -539,3 +539,17 @@ fn check_edit_reports_whitespace_hint_without_changing_files() {
         assert!(!workspace.path().join(".isa").exists());
     }
 }
+
+#[test]
+fn duplicate_edit_reports_exact_locations_without_changing_files() {
+    let workspace = Workspace::new();
+    workspace.write("source.txt", "private\nold\nother\nold\n");
+    workspace.write("proposal.txt", "File: source.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE");
+    for command in ["check-edit", "apply-edit"] {
+        let output = cli(&[command, "proposal.txt"], &workspace);
+        assert!(!output.status.success()); let err = stderr(&output);
+        assert!(err.contains("Exact match candidate lines")); assert!(err.contains("2-2")); assert!(err.contains("4-4"));
+        assert!(!err.contains("private")); assert!(!workspace.path().join(".isa").exists());
+        assert_eq!(fs::read_to_string(workspace.path().join("source.txt")).unwrap(), "private\nold\nother\nold\n");
+    }
+}
