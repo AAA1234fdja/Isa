@@ -108,11 +108,18 @@ Removing a team member removes its nodes and connections. Cancel discards change
 Pools and workflows are stored in this browser and are not included in chat
 exports. Choose a pool using the composer or chat settings to run it. The browser
 runner requires 1–8 nodes and one connected root (an agent or parallel group),
-with no cycles after parallel groups are combined. It evaluates delegated nodes
-before their managers, calls parallel nodes concurrently, and asks the first node
-in each parallel group to synthesize their responses. Agent output is supplied
-to subsequent models as untrusted reference data. Synthesis is a model response,
-not a guaranteed objective evaluation. Subagent instructions and configured
+with no cycles after parallel groups are combined, and at most one manager per
+node or parallel group. A manager first generates a JSON plan assigning a specific
+task to each directly managed group. An invalid or incomplete plan fails the run
+before its children start. Children execute their assigned tasks concurrently;
+the manager then reviews their responses and completes its own task. For a
+parallel group, each member responds concurrently and its first member compares
+the responses for correctness, completeness and relevance, reconciles differences,
+and synthesizes an answer. If a parallel group has subordinates, its first member
+also coordinates delegation for that group. Agent output is supplied to
+subsequent models as untrusted reference data. The comparison is a model response,
+not a guaranteed objective evaluation. Delegated tasks and parallel responses are
+shown in expandable Agent pool details and stored locally with the chat. Subagent instructions and configured
 `min_tokens`, `max_tokens`, and `reasoning_effort` are sent to the provider;
 unsupported parameters may cause errors. Blank values are omitted. Each request
 has a 45-second browser timeout. A failed node fails the pool; cancellation
@@ -137,5 +144,5 @@ platform, permissions, and network.
 Browser routing regression tests (mocked providers, no real API calls): start
 `dev/preview.mjs`, install `playwright-core` and Chromium outside the repository,
 then run `node tests/browser-routing.cjs` and
-`node tests/browser-routing-errors.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+`node tests/browser-routing-errors.cjs` and `node tests/browser-pool-workflow.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
