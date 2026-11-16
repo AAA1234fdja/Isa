@@ -129,9 +129,29 @@ subsequent models as untrusted reference data. The comparison is a model respons
 not a guaranteed objective evaluation. Delegated tasks and parallel responses are
 shown in expandable Agent pool details and stored locally with the chat. Subagent instructions and configured
 `min_tokens`, `max_tokens`, and `reasoning_effort` are sent to the provider;
-unsupported parameters may cause errors. Blank values are omitted. Each request
-has a 45-second browser timeout. A failed node fails the pool; cancellation
-aborts browser requests but may not stop remote computation.
+unsupported parameters may cause errors. Blank values are omitted. ISA does not
+independently control the reasoning-token budget: providers may count reasoning
+against `max_tokens`. If the provider returns reasoning but no final content,
+ISA displays a specific error without storing the reasoning, and includes any
+reported usage. There is no automatic retry or guarantee that a higher limit
+will work.
+
+Pool delegation requests can optionally use OpenAI-compatible strict JSON Schema
+via the **Request strict JSON Schema for pool delegation** checkbox in each
+custom provider's settings. It defaults off; enable it only for a provider and
+model that support this exact API. ISA still validates task and subagent IDs,
+and rejects unsupported or invalid responses without silently retrying. This
+requests a provider feature; ISA does not implement constrained decoding.
+
+Intermediate agent-to-agent answers are instructed to be concise while retaining
+important findings and uncertainty. To avoid silently discarding material, an
+intermediate answer exceeding 8,000 characters fails the pool instead of being
+truncated; a pool response reported by the provider as stopped by its output
+limit is also rejected. The final user-facing answer is not subject to the
+intermediate character limit. Conciseness and token or latency reductions are not guaranteed. Pool
+requests have a 120-second browser timeout; other custom-provider requests retain
+45 seconds. A failed node fails the pool; cancellation aborts browser requests
+but may not stop remote computation.
 
 The runner does not invoke tools, plugins, or the Rust harness, and does not
 provide sandboxing or autonomous file editing. A pool may make up to 16 model
@@ -154,7 +174,7 @@ Browser routing regression tests (mocked providers, no real API calls): start
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
 `node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
-and `node tests/browser-context-errors.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and `node tests/browser-context-errors.cjs`. The dependency-free runtime regression can be run with `node tests/pool-runtime.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
 
 
