@@ -2,39 +2,48 @@
   "plugins": [
     {
       "id": "architecture",
-      "count": 13
+      "count": 13,
+      "collection": "software-engineering"
     },
     {
       "id": "devops",
-      "count": 21
+      "count": 21,
+      "collection": "software-engineering"
     },
     {
       "id": "docs",
-      "count": 1
+      "count": 1,
+      "collection": "software-engineering"
     },
     {
       "id": "frontend",
-      "count": 25
+      "count": 25,
+      "collection": "software-engineering"
     },
     {
       "id": "java",
-      "count": 11
+      "count": 11,
+      "collection": "software-engineering"
     },
     {
       "id": "node",
-      "count": 11
+      "count": 11,
+      "collection": "software-engineering"
     },
     {
       "id": "programming-skills",
-      "count": 22
+      "count": 22,
+      "collection": "software-engineering"
     },
     {
       "id": "python",
-      "count": 20
+      "count": 20,
+      "collection": "software-engineering"
     },
     {
       "id": "workflow",
-      "count": 4
+      "count": 4,
+      "collection": "software-engineering"
     }
   ],
   "skillCount": 128

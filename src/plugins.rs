@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::{collections::HashSet, fs, path::{Path, PathBuf}};
 
 #[derive(Debug)]
-struct Skill { plugin: String, name: String, description: String, path: PathBuf }
+struct Skill { plugin: String, collection: Option<String>, name: String, description: String, path: PathBuf }
 fn valid_id(id: &str) -> bool { !id.is_empty() && id.len() <= 100 && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_') }
 fn directories(path: &Path) -> Vec<PathBuf> {
     let mut entries: Vec<_> = fs::read_dir(path).into_iter().flatten().filter_map(Result::ok).filter_map(|entry| {
@@ -21,18 +21,25 @@ fn description(text: &str) -> String {
     if !text.starts_with("---\n") && !text.starts_with("---\r\n") { return String::new(); }
     text.lines().skip(1).take_while(|line| line.trim() != "---").find_map(|line| line.strip_prefix("description:")).map(|s| s.trim().trim_matches(['\'', '"']).chars().take(500).collect()).unwrap_or_default()
 }
+fn scan_plugin(plugin: &Path, collection: Option<&str>, result: &mut Vec<Skill>) {
+    let Some(plugin_name) = plugin.file_name().and_then(|s| s.to_str()) else { return };
+    let skills_dir = plugin.join("skills");
+    if fs::symlink_metadata(&skills_dir).map_or(true, |m| !m.is_dir() || m.file_type().is_symlink()) { return; }
+    for skill in directories(&skills_dir) {
+        let Some(name) = skill.file_name().and_then(|s| s.to_str()) else { continue };
+        let file = skill.join("SKILL.md");
+        if let Some(content) = read_regular(&file, 128 * 1024) {
+            result.push(Skill { plugin: plugin_name.to_owned(), collection: collection.map(str::to_owned), name: name.to_owned(), description: description(&content), path: file });
+        }
+    }
+}
 fn scan(root: &Path) -> Vec<Skill> {
     let mut result = Vec::new(); let base = root.join("plugins");
     if fs::symlink_metadata(&base).map_or(true, |m| !m.is_dir() || m.file_type().is_symlink()) { return result; }
     for plugin in directories(&base) {
-        let Some(plugin_name) = plugin.file_name().and_then(|s| s.to_str()) else { continue };
-        let skills_dir = plugin.join("skills");
-        if fs::symlink_metadata(&skills_dir).map_or(true, |m| !m.is_dir() || m.file_type().is_symlink()) { continue; }
-        for skill in directories(&skills_dir) {
-            let Some(name) = skill.file_name().and_then(|s| s.to_str()) else { continue };
-            let file = skill.join("SKILL.md");
-            if let Some(content) = read_regular(&file, 128 * 1024) { result.push(Skill { plugin: plugin_name.to_owned(), name: name.to_owned(), description: description(&content), path: file }); }
-        }
+        if plugin.file_name().and_then(|s| s.to_str()) == Some("software-engineering") {
+            for folder in directories(&plugin) { scan_plugin(&folder, Some("software-engineering"), &mut result); }
+        } else { scan_plugin(&plugin, None, &mut result); }
     }
     result
 }
@@ -40,7 +47,7 @@ pub fn catalog(root: &Path) -> Value {
     let skills = scan(root); let mut groups = Vec::new();
     for skill in &skills {
         if !groups.iter().any(|item: &Value| item["id"] == skill.plugin) {
-            groups.push(json!({"id": skill.plugin, "count": skills.iter().filter(|s| s.plugin == skill.plugin).count()}));
+            groups.push(json!({"id": skill.plugin, "collection": skill.collection, "count": skills.iter().filter(|s| s.plugin == skill.plugin && s.collection == skill.collection).count()}));
         }
     }
     json!({"plugins":groups,"skillCount":skills.len()})
@@ -59,9 +66,10 @@ fn words(text: &str) -> HashSet<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| w.len() >= 4 && w.len() <= 40)
         .map(str::to_ascii_lowercase).filter(|w| !matches!(w.as_str(), "this"|"that"|"with"|"from"|"your"|"have"|"using"|"when"|"user"|"skill"|"skills"|"create"|"build"|"project"|"work"|"code"|"help"|"design"|"application"|"development"|"software")) .collect()
 }
-pub fn filter_groups(ids: Vec<String>, software_engineering_enabled: bool) -> Vec<String> {
+pub fn filter_groups(root: &Path, ids: Vec<String>, software_engineering_enabled: bool) -> Vec<String> {
     if software_engineering_enabled { return ids; }
-    ids.into_iter().filter(|id| !matches!(id.as_str(), "architecture" | "devops" | "docs" | "frontend" | "java" | "node" | "programming-skills" | "python" | "workflow")).collect()
+    let disabled: HashSet<String> = scan(root).into_iter().filter(|s| s.collection.as_deref() == Some("software-engineering")).map(|s| s.plugin).collect();
+    ids.into_iter().filter(|id| !disabled.contains(id)).collect()
 }
 pub fn references(root: &Path, task: &str, enabled: &[String]) -> Vec<Value> {
     let query = words(task); if query.is_empty() { return Vec::new(); }
@@ -82,8 +90,25 @@ pub fn references(root: &Path, task: &str, enabled: &[String]) -> Vec<Value> {
     use super::*;
     #[test] fn disabling_collection_filters_only_its_folders() {
         let ids = vec!["frontend".to_string(), "custom".to_string()];
-        assert_eq!(filter_groups(ids.clone(), false), vec!["custom"]);
-        assert_eq!(filter_groups(ids.clone(), true), ids);
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(filter_groups(root, ids.clone(), false), vec!["custom"]);
+        assert_eq!(filter_groups(root, ids.clone(), true), ids);
+    }
+    #[test] fn nested_collection_and_standalone_plugins_are_discovered() {
+        let root = std::env::temp_dir().join(format!("isa-plugin-scan-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let nested = root.join("plugins/software-engineering/extra/skills/extra-skill");
+        let standalone = root.join("plugins/custom/skills/custom-skill");
+        fs::create_dir_all(&nested).unwrap(); fs::create_dir_all(&standalone).unwrap();
+        fs::write(nested.join("SKILL.md"), "---\ndescription: Angular components\n---\nNested guidance").unwrap();
+        fs::write(standalone.join("SKILL.md"), "---\ndescription: Angular components\n---\nStandalone guidance").unwrap();
+        let catalog = catalog(&root); let list = catalog["plugins"].as_array().unwrap();
+        assert!(list.iter().any(|v| v["id"] == "extra" && v["collection"] == "software-engineering"));
+        assert!(list.iter().any(|v| v["id"] == "custom" && v["collection"].is_null()));
+        let enabled = filter_groups(&root, vec!["extra".into(), "custom".into()], false);
+        assert_eq!(enabled, vec!["custom"]);
+        let selected = references(&root, "angular components", &enabled);
+        assert_eq!(selected.len(), 1); assert_eq!(selected[0]["plugin"], "custom");
+        fs::remove_dir_all(root).unwrap();
     }
     #[test] fn catalog_and_selection_respect_enabled_plugins() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")); let data = catalog(root);

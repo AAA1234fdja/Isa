@@ -120,7 +120,7 @@ fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
                 None => true,
                 Some(value) => value.as_bool().ok_or("Invalid plugin switch")?,
             };
-            let ids = plugins::filter_groups(ids, software_engineering_enabled);
+            let ids = plugins::filter_groups(&root, ids, software_engineering_enabled);
             let selected = plugins::references(&root, &messages.last().ok_or("Messages are required")?.1, &ids);
             if !selected.is_empty() {
                 let last = &mut messages.last_mut().unwrap().1;

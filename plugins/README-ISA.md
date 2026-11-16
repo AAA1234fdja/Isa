@@ -3,7 +3,7 @@
 The nine plugin directories are imported unchanged from
 [wesleyegberto/software-engineering-skills](https://github.com/wesleyegberto/software-engineering-skills/tree/94fb08a3f136aa8010f6e1c6585f68836ce7cf1d/plugins)
 (revision `94fb08a3f136aa8010f6e1c6585f68836ce7cf1d`). The upstream MIT
-license is in `LICENSE`. Imported skills, agents, commands, scripts, and
+license is in `software-engineering/LICENSE`. Imported skills, agents, commands, scripts, and
 configuration files are third-party material and are not automatically trusted
 or executed by ISA.
 
@@ -14,7 +14,8 @@ refresh it after changing the plugin directories, run from the ISA repository:
 cargo run --quiet --bin isa-plugin-index -- . > plugins/SKILL-LIST.md
 ```
 
-The Rust web server scans `plugins/<plugin>/skills/<skill>/SKILL.md` in its
+The Rust web server scans `plugins/software-engineering/<folder>/skills/<skill>/SKILL.md`
+and standalone `plugins/<plugin>/skills/<skill>/SKILL.md` in its
 own current working directory for each catalog request and model request; it
 ignores symlinked directories and oversized or symlinked files. The Markdown
 snapshot is not the runtime registry. Start the server in the repository
