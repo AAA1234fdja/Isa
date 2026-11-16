@@ -118,6 +118,8 @@ fn endpoint_reports_advisory_syntax_without_changing_the_source() {
     assert_eq!(value["syntax"]["status"], "checked");
     assert_eq!(value["syntax"]["beforeHasErrors"], false);
     assert_eq!(value["syntax"]["afterHasErrors"], true);
+    assert!(!value["syntax"]["afterIssues"].as_array().unwrap().is_empty());
+    assert!(!body.contains("fn main"));
     assert_eq!(fs::read_to_string(server.workspace.join("source.rs")).unwrap(), "fn main() {}\n");
     assert!(!server.workspace.join(".isa").exists());
 }

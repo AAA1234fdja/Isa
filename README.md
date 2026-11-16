@@ -294,7 +294,10 @@ with a best-effort 100 ms parse budget per snapshot. Unsupported, oversized or
 unfinished parses are reported as unavailable, not as passing. A parse without
 errors is not a compiler, type checker, test suite or correctness guarantee;
 existing errors also make it impossible to infer from the two booleans whether
-a particular error is new. The comparison never writes the proposed result.
+a particular error is new. For each snapshot ISA reports up to eight approximate
+error or missing-syntax locations (1-based lines and UTF-8 byte columns), with
+an explicit incomplete flag if the bounded traversal is cut short. It does not
+return surrounding source text. The comparison never writes the proposed result.
 
 ### Read-only web proposal review
 

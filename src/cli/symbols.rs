@@ -28,7 +28,7 @@ pub fn compare_syntax(path: &Path, before: &str, after: &str) -> Value {
     const LIMIT: usize = 64 * 1024;
     let Some(lang) = language(path) else { return json!({"status":"unsupported"}); };
     if before.len() > LIMIT || after.len() > LIMIT { return json!({"status":"too_large"}); }
-    fn has_error(lang: &tree_sitter::Language, source: &str) -> Option<bool> {
+    fn inspect(lang: &tree_sitter::Language, source: &str) -> Option<(bool, Vec<Value>, bool)> {
         let mut parser = tree_sitter::Parser::new();
         parser.set_language(lang).ok()?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
@@ -37,10 +37,34 @@ pub fn compare_syntax(path: &Path, before: &str, after: &str) -> Value {
         let mut read = |offset: usize, _: tree_sitter::Point| &bytes[offset.min(bytes.len())..];
         let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
         let tree = parser.parse_with_options(&mut read, None, Some(options))?;
-        Some(tree.root_node().has_error())
+        let root = tree.root_node();
+        let has_errors = root.has_error();
+        let mut issues = Vec::new();
+        let mut pending = vec![root];
+        let mut visited = 0usize;
+        let mut truncated = false;
+        'walk: while let Some(node) = pending.pop() {
+            if visited >= 20_000 || std::time::Instant::now() >= deadline { truncated = true; break; }
+            visited += 1;
+            if node.is_error() || node.is_missing() {
+                if issues.len() >= 8 { truncated = true; break; }
+                let pos = node.start_position();
+                issues.push(json!({"kind": if node.is_missing() { "missing" } else { "error" }, "line":pos.row + 1,"byteColumn":pos.column + 1}));
+            }
+            // Only branches carrying errors need inspection, plus missing nodes.
+            let mut cursor = node.walk();
+            let mut children = Vec::new();
+            for child in node.children(&mut cursor) {
+                if visited >= 20_000 || std::time::Instant::now() >= deadline { truncated = true; break 'walk; }
+                visited += 1;
+                if child.has_error() || child.is_error() || child.is_missing() { children.push(child); }
+            }
+            pending.extend(children.into_iter().rev());
+        }
+        Some((has_errors, issues, truncated))
     }
-    match (has_error(&lang, before), has_error(&lang, after)) {
-        (Some(before_error), Some(after_error)) => json!({"status":"checked","method":"tree-sitter","beforeHasErrors":before_error,"afterHasErrors":after_error}),
+    match (inspect(&lang, before), inspect(&lang, after)) {
+        (Some((before_error, before_issues, before_truncated)), Some((after_error, after_issues, after_truncated))) => json!({"status":"checked","method":"tree-sitter","beforeHasErrors":before_error,"afterHasErrors":after_error,"beforeIssues":before_issues,"afterIssues":after_issues,"beforeIssuesTruncated":before_truncated,"afterIssuesTruncated":after_truncated}),
         _ => json!({"status":"unavailable"}),
     }
 }
@@ -177,6 +201,11 @@ mod tests {
         let introduced = compare_syntax(rust, clean, broken);
         assert_eq!(introduced["status"], "checked");
         assert_eq!(introduced["beforeHasErrors"], false); assert_eq!(introduced["afterHasErrors"], true);
+        assert!(introduced["beforeIssues"].as_array().unwrap().is_empty());
+        let issues = introduced["afterIssues"].as_array().unwrap();
+        assert!(!issues.is_empty() && issues.len() <= 8);
+        assert!(issues.iter().all(|issue| issue["line"].as_u64().unwrap() >= 1 && issue["byteColumn"].as_u64().unwrap() >= 1));
+        assert!(!introduced.to_string().contains("fn main"));
         let fixed = compare_syntax(rust, broken, clean);
         assert_eq!(fixed["beforeHasErrors"], true); assert_eq!(fixed["afterHasErrors"], false);
         assert_eq!(compare_syntax(Path::new("note.txt"), "a", "b")["status"], "unsupported");
