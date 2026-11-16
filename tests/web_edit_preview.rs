@@ -4,13 +4,18 @@ use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+// The server takes an address, not an inherited socket. Serialize port reservation
+// through readiness so concurrent tests cannot pick the same just-released port.
+static START_LOCK: Mutex<()> = Mutex::new(());
 
 struct Server { child: Child, address: String, workspace: PathBuf }
 impl Server {
     fn start(configure_workspace: bool) -> Self {
+        let _startup = START_LOCK.lock().unwrap();
         let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
         let workspace = std::env::temp_dir().join(format!("isa-web-review-{}-{id}", std::process::id()));
         fs::create_dir(&workspace).unwrap();
