@@ -37,3 +37,19 @@ its key in the current tab; it cannot clear separate tabs or revoke remote
 credentials. Rotate or revoke a key at the provider if needed. If a saved
 chat references a deleted provider, it reports an error instead of silently
 falling back to another one.
+
+## Provider directory
+
+Settings contains a static alphabetical directory of 50 commonly encountered
+AI providers and platforms, for discovery rather than a verified popularity
+ranking. Eight rows are visible at a time; scroll the directory for the rest.
+The list does not assert that the provider is connected, that its native API is
+supported by ISA, or that it permits browser CORS. “Set up” only pre-fills the
+provider name in the custom-provider form. Users must supply and verify a
+compatible HTTPS chat-completions URL, model, and any needed key themselves.
+Ollama is the sole built-in option currently.
+
+Directory references: [LiteLLM provider list](https://github.com/BerriAI/litellm#supported-providers)
+and [AI inference providers comparison](https://infrabase.ai/blog/ai-inference-api-providers-compared).
+Provider names and API capabilities can change; recheck official documentation
+before configuring a provider.
