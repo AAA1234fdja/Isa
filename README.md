@@ -116,3 +116,7 @@ When Rust is unavailable, a development-only JavaScript bridge can run the same 
 Chat messages display local timestamps. Settings lets users choose United States or Colombia date and time formatting; the clock uses the device time zone. While a request is pending, the send button becomes a stop button and aborts the browser request.
 
 GitHub CLI authorization and planned Google Drive, Gmail, and Notion integrations are documented in [Connector authorization](docs/connectors.md). The browser connector menu is not yet connected to these flows.
+
+## Settings
+
+The Settings screen groups functional controls into Appearance, Chat, and Data. Appearance stores the light/dark/system mode, an ISA green accent, interface scale, and reduced-motion preference in the browser. Chat controls regional date formatting. Data can export or delete browser-local chats; exports include attached text. These preferences and conversations are not synchronized between devices or connected to CLI profiles.
