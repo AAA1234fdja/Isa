@@ -20,7 +20,7 @@ fn safe_path(root: &Path, relative: &Path) -> Result<PathBuf> {
         };
         let name_text = name.to_string_lossy();
         if name_text.chars().any(|ch| ch.is_control() || unsafe_for_review(ch)) { return Err("path cannot contain control characters".into()); }
-        if name_text == ".git" || name_text == ".isa" || name_text == ".env" || name_text.starts_with(".env.") || name_text == ".git-credentials" || name_text == ".netrc" {
+        if name_text == ".git" || name_text == ".isa" || name_text == ".env" || name_text.starts_with(".env.") || name_text == ".git-credentials" || name_text == ".netrc" || matches!(name_text.as_ref(), ".ssh" | ".aws" | ".gnupg" | ".kube" | "id_rsa" | "id_ed25519") {
             return Err("protected paths cannot be edited".into());
         }
         path.push(name);
@@ -110,21 +110,43 @@ pub fn apply_proposal(root: &Path, proposal: &Path) -> Result<()> {
     replace(root, Path::new(file), search, replacement)
 }
 
+// Read-only review: returns only the submitted block plus match metadata. It
+// never creates an undo record, writes a file, or grants permission to edit.
+pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Value, &'static str> {
+    if proposal.len() > 32 * 1024 { return Err("Proposal exceeds 32 KiB."); }
+    let (file, old, new) = parse_proposal(proposal).map_err(|_| "Invalid SEARCH/REPLACE format or unsafe characters.")?;
+    let target = safe_path(root, Path::new(file)).map_err(|_| "Target is unavailable, protected, or not a regular file.")?;
+    let mut before = String::new();
+    std::fs::File::open(&target).map_err(|_| "Could not read the target file.")?.take(LIMIT + 1).read_to_string(&mut before).map_err(|_| "Target must be a readable UTF-8 text file.")?;
+    if before.len() as u64 > LIMIT || before.contains('\0') { return Err("Target is not supported or exceeds 1 MiB."); }
+    let (after, line) = checked_replacement(&before, old, new).map_err(|_| "The search must match exactly once and the replacement must be valid and within the size limits.")?;
+    if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review."); }
+    Ok(json!({"file":file,"search":old,"replacement":new,"line":line,"beforeBytes":before.len(),"afterBytes":after.len(),"readOnly":true}))
+}
+
+fn checked_replacement(before: &str, old: &str, new: &str) -> Result<(String, usize)> {
+    if old.is_empty() { return Err("search text cannot be empty".into()); }
+    if old.chars().chain(new.chars()).any(unsafe_for_review) { return Err("replacement contains characters that cannot be reviewed safely".into()); }
+    if old.chars().count() > 4000 || new.chars().count() > 4000 { return Err("replacement is too large to review safely (maximum 4000 characters per side)".into()); }
+    let first = before.find(old).ok_or("search text must match exactly once")?;
+    let next = first + before[first..].chars().next().ok_or("invalid search match")?.len_utf8();
+    if before[next..].contains(old) { return Err("search text must match exactly once, including overlapping matches".into()); }
+    let after = before.replacen(old, new, 1);
+    if after == before { return Err("replacement would not change the file".into()); }
+    if after.len() as u64 > LIMIT { return Err("result exceeds the 1 MiB limit".into()); }
+    let line = 1 + before[..first].bytes().filter(|b| *b == b'\n').count();
+    Ok((after, line))
+}
+
 pub fn replace(root: &Path, relative: &Path, old: &str, new: &str) -> Result<()> {
     replace_with_approval(root, relative, old, new, None, || confirm("Apply this replacement?"))
 }
 
 fn replace_with_approval(root: &Path, relative: &Path, old: &str, new: &str, expected: Option<&str>, approve: impl FnOnce() -> Result<bool>) -> Result<()> {
-    if old.is_empty() { return Err("search text cannot be empty".into()); }
-    if old.chars().chain(new.chars()).any(unsafe_for_review) { return Err("replacement contains characters that cannot be reviewed safely".into()); }
-    if old.chars().count() > 4000 || new.chars().count() > 4000 { return Err("replacement is too large to review safely (maximum 4000 characters per side)".into()); }
     let path = safe_path(root, relative)?;
     let before = fs::read_to_string(&path)?;
     if expected.is_some_and(|snapshot| snapshot != before.as_str()) { return Err("file changed since it was sent to the model; refusing stale proposal".into()); }
-    if before.matches(old).count() != 1 { return Err("search text must match exactly once".into()); }
-    let after = before.replacen(old, new, 1);
-    if after == before { return Err("replacement would not change the file".into()); }
-    if after.len() as u64 > LIMIT { return Err("result exceeds the 1 MiB limit".into()); }
+    let (after, _) = checked_replacement(&before, old, new)?;
     println!("File: {}\n--- remove ---\n{}\n--- add ---\n{}", relative.display(), visible(old), visible(new));
     if !approve()? { return Err("edit cancelled".into()); }
     if safe_path(root, relative)? != path || fs::read_to_string(&path)? != before { return Err("file changed while awaiting approval".into()); }
@@ -246,6 +268,22 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         let undo: Value = serde_json::from_slice(&fs::read(root.join(".isa/undo.json")).unwrap()).unwrap();
         assert_eq!(undo["before"], "old"); assert_eq!(undo["after"], "new");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preview_is_read_only_and_rejects_ambiguous_or_protected_targets() {
+        let root = std::env::temp_dir().join(format!("isa-preview-edit-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap(); fs::write(root.join("safe.txt"), "first\nold value\n").unwrap();
+        let proposal = "File: safe.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE";
+        let preview = preview_proposal(&root, proposal).unwrap();
+        assert_eq!(preview["line"], 2); assert_eq!(preview["readOnly"], true); assert_eq!(preview["search"], "old");
+        assert_eq!(fs::read_to_string(root.join("safe.txt")).unwrap(), "first\nold value\n"); assert!(!root.join(".isa").exists());
+        assert!(preview_proposal(&root, "File: ../outside\n<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE").is_err());
+        assert!(preview_proposal(&root, "File: .env\n<<<<<<< SEARCH\na\n=======\nb\n>>>>>>> REPLACE").is_err());
+        assert!(checked_replacement("aaa", "aa", "b").is_err());
+        assert!(checked_replacement("ééé", "éé", "b").is_err());
+        fs::write(root.join("safe.txt"), "old old").unwrap(); assert!(preview_proposal(&root, proposal).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

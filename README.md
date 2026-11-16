@@ -277,3 +277,7 @@ secrets; exclusion rules are not a secret scanner. The model may produce an
 incorrect or unsafe change even when formatting is valid, so review it before
 approval. There is no sandbox or race-free protection against a concurrently
 modified workspace, no multi-file transaction, and no automatic test execution.
+
+### Read-only web proposal review
+
+Assistant messages containing `<<<<<<< SEARCH` offer **Review proposal**. Paste or edit one complete `File: …` SEARCH/REPLACE block in the dialog and select **Check proposal**. The Rust server checks the existing UTF-8 file in `ISA_WEB_AGENT_WORKSPACE`, validates the same format and exact unique match used by the CLI, and displays the submitted search and replacement literally. No file or undo record is written; this does not apply a patch. A successful check is a snapshot, not a guarantee that the file remains unchanged. If the model surrounds the block with explanations or Markdown fences, remove them before checking. The browser folder picker does not configure the server workspace. The Node development preview does not implement this endpoint. Path exclusions and symlink checks are not a sandbox or race-free security boundary; use a trusted workspace and server, and do not expose it to untrusted clients.

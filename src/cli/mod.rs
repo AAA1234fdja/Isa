@@ -463,6 +463,10 @@ pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, Str
     }
 }
 
+pub fn web_preview_edit(root: &std::path::Path, proposal: &str) -> std::result::Result<serde_json::Value, &'static str> {
+    edit::preview_proposal(root, proposal)
+}
+
 // Server workspace is selected by trusted configuration, never by the request.
 pub fn web_symbols(root: &std::path::Path, query: &str) -> Result<serde_json::Value> {
     symbols::lookup(root, query)
