@@ -158,7 +158,21 @@ ISA supports reviewed, text-only local skills for the response harness. See [Ski
 
 ### Command approval interface
 
-The composer offers three locally saved approval preferences: ask every time, ask for high-risk commands, and unrestricted. The last option requires confirmation because it would allow commands without a prompt. These are **UI preferences only**: the current chat harness has no Bash execution or authenticated approval protocol, so the selection does not enforce permissions or execute anything. The reusable command review component is prepared to show a command and working directory with allow once, allow always, and deny; it is not connected to an execution backend. A future backend must enforce the policy, conservatively classify unknown shell commands as high risk, scope remembered approvals to the exact command and working directory, and request a new approach after denial. No command or approval should be accepted solely on the authority of browser state. The Node preview and decoy cannot create real approval requests.
+The composer stores a **per-chat supervision preference**: ask every time,
+ask occasionally (risky or unknown actions), or never ask. New and legacy
+chats default to ask every time; the old global preference is not migrated.
+Selecting never ask requires an explicit confirmation for the current chat.
+These are **UI preferences only**, not enforced permissions: chat cannot run
+commands, MCP tools or skills, and there is no authenticated approval protocol.
+CLI commands, MCP and skills are separate; their existing approvals are not
+changed by this selector. Model data-sharing consent is also separate.
+
+Before enabling chat execution, a trusted backend must enforce the selected
+policy for commands, tools and skill actions, conservatively treat unknown
+operations as risky, scope any remembered approvals to the exact action and
+workspace, and handle denial and changes while requests are pending. Browser
+state alone is not authorization. The Node preview and decoy cannot create real
+approval requests. No mode currently makes the browser a sandbox.
 
 ### Attachments
 
