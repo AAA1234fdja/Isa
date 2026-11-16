@@ -153,5 +153,29 @@ Browser routing regression tests (mocked providers, no real API calls): start
 `dev/preview.mjs`, install `playwright-core` and Chromium outside the repository,
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
-and `node tests/browser-subagent-on-demand.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+`node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
+and `node tests/browser-context-errors.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
+
+
+## Token reporting
+
+The composer Tokens panel shows per-conversation input, output, cached and total
+counts summed from OpenAI-compatible `usage` objects returned by successful
+custom-provider requests. Pool planning, delegation, parallel, comparison, goal
+and compression calls are counted individually when their providers report
+usage. Cached tokens are part of input, not an additional cost. Unknown fields
+are shown as unavailable or incomplete; failures, cancellations and providers
+that do not return usage may still incur costs. The Rust/Ollama server and its
+internal harness calls do not currently expose token usage, and are marked
+unknown rather than estimated. Historical conversations have no retroactive
+usage. Totals may therefore be incomplete.
+
+Context is a rough estimate of currently selected conversation text, using UTF-8
+bytes divided by four; it excludes system prompts, attachments, pool instructions
+and model-specific formatting, and is not a context-window measurement. The
+daily chart sums reported total tokens by local date: no reported usage is gray,
+then positive totals up to 100K, over 100K–1M, over 1M–10M, over 10M–200M, over
+200M–1B and over 1B use levels 1–6 respectively. A day with unreported calls
+may be undercounted. Counts, summaries, plans and messages are stored locally
+in the browser; they are not billing records.
