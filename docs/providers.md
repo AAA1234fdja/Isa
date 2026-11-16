@@ -71,3 +71,19 @@ Preset reference pages (checked 2026-11-16):
 - [Cerebras](https://inference-docs.cerebras.ai/resources/openai), [Cohere](https://docs.cohere.com/docs/compatibility-api), [DeepInfra](https://docs.deepinfra.com/chat/overview), [DeepSeek](https://api-docs.deepseek.com/), [Fireworks AI](https://docs.fireworks.ai/nexus/apis-and-sdks), [Groq](https://console.groq.com/docs/api-reference)
 - [Inception](https://docs.inceptionlabs.ai/get-started), [Mistral AI](https://docs.mistral.ai/api), [Moonshot AI](https://platform.moonshot.ai/docs/api/chat.en-US), [Nebius AI Studio](https://docs.nebius.com/studio/inference/integrations/postman), [Novita AI](https://novita.ai/docs/guides/llm-api), [NVIDIA NIM](https://docs.api.nvidia.com/nim/reference/google-codegemma-7b-infer), [OpenRouter](https://openrouter.ai/docs/api_reference/overview)
 - [SambaNova](https://docs.sambanova.ai/cloud/docs/integrations/vscode), [SiliconFlow](https://docs.siliconflow.com/en/usercases/use-siliconcloud-in-immersive-translate), [Together AI](https://docs.together.ai/docs/chat-overview), [Upstage](https://developers.upstage.ai/docs/apis/chat), [xAI](https://docs.x.ai/developers/model-capabilities/legacy/chat-completions), [Z.ai](https://docs.z.ai/guides/llm/glm-4.6), [Alibaba Cloud Model Studio](https://www.alibabacloud.com/help/tc/model-studio/qwen-api-via-openai-chat-completions).
+
+## Agents and pools
+
+In Agents, select a saved provider to edit its system prompt or delete the
+provider. The prompt is saved in localStorage, is not secret, and is sent as a
+system message on every direct custom-provider chat request using that provider,
+including existing conversations. The provider's model must support system
+messages. Editing provider settings preserves the prompt. Deletion makes saved
+chat references unavailable; pool members are shown as unavailable until removed.
+
+The provider list scrolls after ten rows. Agents Pool lets you create, rename,
+delete and edit local teams and save directed “manages” connections between
+their providers. Duplicate, self-referential and cyclic connections are rejected.
+Removing a team member also removes their connections. Pools and workflows are
+configuration only: they do not invoke models, delegate, or run agents. They are
+stored in this browser and are not included in chat exports.
