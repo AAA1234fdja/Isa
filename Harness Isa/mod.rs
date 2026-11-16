@@ -1,6 +1,7 @@
 use super::{session, Result};
 mod evaluation;
 mod plan;
+mod planner;
 mod retrieval;
 use std::path::Path;
 
@@ -54,9 +55,35 @@ fn execute<E: Engine>(engine: &mut E, model: &str, messages: &[session::Message]
 pub fn respond<F: FnMut(&str) -> Result<()>>(root: &Path, model: &str, messages: &[session::Message], mut on_chunk: F) -> Result<String> {
     let mode = Mode::parse(&std::env::var("ISA_HARNESS_MODE").unwrap_or_default())?;
     let retrieval = retrieval::Retrieval::parse(&std::env::var("ISA_HARNESS_CONTEXT").unwrap_or_default())?;
+    plan::validate(messages)?;
+    let selection = std::env::var("ISA_SKILLS").unwrap_or_default();
+    let planning_enabled = match std::env::var("ISA_HARNESS_PLANNER").as_deref() {
+        Ok("0") => false,
+        Ok("1") | Err(_) => true,
+        _ => return Err("ISA_HARNESS_PLANNER must be 0 or 1".into()),
+    };
+    let planned = if planning_enabled {
+        eprintln!("ISA harness: identifying skill and tool needs...");
+        match planner::create(root, &messages.last().unwrap().content, model) {
+            Ok(plan) => {
+                eprintln!("ISA harness: {} skill(s) recommended, {} proposed, {} tool(s) identified; no tools executed.", plan.selected_skills.len(), plan.new_skills.len(), plan.tools.len());
+                Some(plan)
+            }
+            Err(_) => { eprintln!("ISA harness: task planning unavailable; continuing without a model plan."); None }
+        }
+    } else { None };
+    let actual_selection = if selection == "auto" {
+        match &planned { Some(plan) => plan.selected_skills.join(","), None => "auto".into() }
+    } else { selection };
     let prepared = retrieval::prepare(root, messages, retrieval)?;
-    let prepared = super::skills::prepare(root, &prepared, &std::env::var("ISA_SKILLS").unwrap_or_default())?;
+    let prepared = super::skills::prepare(root, &prepared, &actual_selection)?;
     execute(&mut Ollama, model, &prepared, mode, &mut on_chunk)
+}
+
+pub fn task_plan(root: &Path, model: &str, task: &str) -> Result<()> {
+    let plan = planner::create(root, task, model)?;
+    println!("{}", serde_json::to_string_pretty(&plan)?);
+    Ok(())
 }
 
 pub fn evaluate(path: &Path, model: &str, mode: &str) -> Result<bool> {

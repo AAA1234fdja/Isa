@@ -242,12 +242,17 @@ fn skill_command(args: &[String]) -> Result<()> {
             if action == "delete" { skills::remove(&root, &id)?; println!("Skill {id} deleted."); }
             else { skills::set_enabled(&root, &id, action == "enable")?; println!("Skill {id} {}.", if action == "enable" { "enabled" } else { "disabled" }); }
         }
+        Some("plan") if (2..=3).contains(&args.len()) => {
+            let task = argument(args, 1, "task")?; let root = directory(args, 2)?;
+            let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".into());
+            harness::task_plan(&root, &model, &task)?;
+        }
         Some("propose") if (3..=4).contains(&args.len()) => {
             let id = argument(args, 1, "skill ID")?; let task = argument(args, 2, "task")?; let root = directory(args, 3)?;
             let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".into());
             skills::propose(&root, &id, &task, &model)?;
         }
-        _ => return Err("usage: skill list [dir] | show <id> [dir] | create|edit <id> <text-file> [dir] | enable|disable|delete <id> [dir] | propose <id> <task> [dir]".into()),
+        _ => return Err("usage: skill plan <task> [dir] | list [dir] | show <id> [dir] | create|edit <id> <text-file> [dir] | enable|disable|delete <id> [dir] | propose <id> <task> [dir]".into()),
     }
     Ok(())
 }

@@ -16,7 +16,7 @@ const MAX_CONTEXT_CHARS: usize = 1500;
 #[serde(deny_unknown_fields)]
 pub struct Skill { version: u32, id: String, enabled: bool, content: String }
 
-fn validate_id(id: &str) -> Result<()> {
+pub(super) fn validate_id(id: &str) -> Result<()> {
     if id == "auto" || id.is_empty() || id.len() > 48 || !id.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') || id.starts_with('-') || id.ends_with('-') { return Err("skill ID must contain lowercase letters, digits and internal hyphens (maximum 48 characters)".into()); }
     Ok(())
 }
@@ -85,6 +85,17 @@ pub fn list(root: &Path) -> Result<Vec<(String, bool)>> {
         if found.len() > MAX_SKILLS { return Err("too many skills".into()); }
     }
     found.sort_by(|a,b| a.0.cmp(&b.0)); Ok(found)
+}
+pub(super) fn catalog_for_planning(root: &Path, catalog: &[(String, bool)]) -> Result<Vec<serde_json::Value>> {
+    let mut entries = Vec::with_capacity(catalog.len());
+    for (id, enabled) in catalog {
+        let summary = if *enabled {
+            let skill = load(root, id)?;
+            Some(skill.content.lines().find(|line| !line.trim().is_empty()).unwrap_or("").chars().take(160).collect::<String>())
+        } else { None };
+        entries.push(serde_json::json!({"id": id, "enabled": enabled, "summary": summary}));
+    }
+    Ok(entries)
 }
 pub fn read_input(path: &Path) -> Result<String> {
     let meta = fs::symlink_metadata(path)?;
