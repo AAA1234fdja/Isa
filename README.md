@@ -54,7 +54,7 @@ cargo run --bin isa-cli -- history my-session .
 
 Sessions are stored in `.isa/sessions` and are not connected to the browser chat. CLI chat does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. The separate `propose-edit` command sends a selected file and applies a reviewed change only after explicit approvals. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File scanning respects Git ignore rules and excludes several common secret paths, but filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
 
-The initial CLI tools do not provide autonomous editing, sandboxing, MCP or a resolved repository graph. See the later sections for the separately implemented semantic index, context summaries, browser routing and read-only agent loop.
+The initial CLI tools do not provide autonomous editing, sandboxing, model-directed MCP tool calling or a resolved repository graph. See the later sections for the separately implemented semantic index, context summaries, browser routing and read-only agent loop.
 
 ### Design references
 
@@ -301,6 +301,36 @@ return surrounding source text. The comparison never writes the proposed result.
 In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
 requesting final approval; detected errors do not automatically apply or block a
 change. The user remains responsible for the decision and for running tests.
+
+### MCP tools over stdio (CLI)
+
+ISA supports an explicitly user-driven subset of MCP protocol `2025-06-18`
+over stdio on Unix. From an interactive terminal, use:
+
+```text
+isa-cli mcp list -- <server-program> [server-arguments...]
+isa-cli mcp call <tool-name> '<json-object>' -- <server-program> [server-arguments...]
+```
+
+ISA asks before starting the server, performs initialization and bounded
+`tools/list` discovery, displays the server-provided tool metadata and exact
+arguments, and asks separately before `tools/call`. It does not enforce the
+server-provided JSON Schema. The model and browser cannot invoke MCP; no tool
+results are automatically sent to a model. Only stdio and this protocol version
+are supported; HTTP, OAuth, resources, prompts, sampling, server requests and
+persistent sessions are not implemented. Discovery is limited to three pages and
+100 tools; calls are refused when discovery is incomplete or the name is not unique. Messages and operation time are bounded. A call can have completed
+before a timeout or interruption, so do not blindly retry it.
+
+**MCP servers are executable programs, not sandboxes.** Even initialization or
+listing may change files, expose environment variables, access credentials or
+the network. Tool descriptions, schemas and results are untrusted. Only start
+trusted servers and review arguments carefully; inherited permissions and process
+groups do not provide isolation, and escaped descendants may survive. Server
+stderr is discarded. ISA terminates the server process on normal client exit,
+but cannot guarantee cleanup of all descendants or effects.
+
+Protocol reference: [MCP stdio transport and lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).
 
 ### Bounded test-feedback loop (CLI)
 

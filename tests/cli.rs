@@ -553,3 +553,28 @@ fn duplicate_edit_reports_exact_locations_without_changing_files() {
         assert_eq!(fs::read_to_string(workspace.path().join("source.txt")).unwrap(), "private\nold\nother\nold\n");
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn mcp_stdio_requires_server_and_tool_approval() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    fn run(workspace: &Workspace, args: &[String], replies: &[u8]) -> Output {
+        let mut master = -1; let mut slave = -1;
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
+        let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+        let input = unsafe { fs::File::from_raw_fd(slave) }; let output = input.try_clone().unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_isa-cli")).current_dir(workspace.path()).args(args)
+            .stdin(Stdio::from(input)).stdout(Stdio::from(output)).stderr(Stdio::piped()).spawn().unwrap();
+        terminal.write_all(replies).unwrap();
+        let mut result = child.wait_with_output().unwrap(); let _ = terminal.read_to_end(&mut result.stdout); result
+    }
+    let workspace = Workspace::new();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp-server.cjs").to_string_lossy().into_owned();
+    let marker = workspace.path().join("called").to_string_lossy().into_owned();
+    let args = vec!["mcp".into(), "call".into(), "write".into(), "{\"value\":1}".into(), "--".into(), "node".into(), fixture, "valid".into(), marker.clone()];
+    let denied_server = run(&workspace, &args, b"n\n"); assert!(!denied_server.status.success()); assert!(!workspace.path().join("called.started").exists());
+    let denied_tool = run(&workspace, &args, b"y\nn\n"); assert!(!denied_tool.status.success()); assert!(workspace.path().join("called.started").exists()); assert!(!workspace.path().join("called").exists()); assert!(stdout(&denied_tool).contains("Call this exact tool"));
+    let allowed = run(&workspace, &args, b"y\ny\n"); assert!(allowed.status.success(), "{}", stderr(&allowed)); assert!(stdout(&allowed).contains("fixture result"));
+    let params: serde_json::Value = serde_json::from_slice(&fs::read(workspace.path().join("called")).unwrap()).unwrap(); assert_eq!(params["name"], "write"); assert_eq!(params["arguments"]["value"], 1);
+}
