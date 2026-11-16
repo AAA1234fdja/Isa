@@ -491,3 +491,34 @@ fn interactive_edit_reports_syntax_before_denied_approval() {
     assert_eq!(fs::read_to_string(workspace.path().join("source.rs")).unwrap(), "fn main() {}\n");
     assert!(!workspace.path().join(".isa").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn feedback_requires_separate_approvals_and_does_not_edit() {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+    fn run(workspace: &Workspace, command: &str, replies: &[u8]) -> Output {
+        let mut master = -1; let mut slave = -1;
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
+        let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+        let input = unsafe { fs::File::from_raw_fd(slave) };
+        let child = Command::new(env!("CARGO_BIN_EXE_isa-cli")).current_dir(workspace.path())
+            .args(["feedback", "source.rs", "fix it", "--", "sh", "-c", command])
+            .stdin(Stdio::from(input)).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        terminal.write_all(replies).unwrap();
+        child.wait_with_output().unwrap()
+    }
+    let workspace = Workspace::new(); workspace.write("source.rs", "fn main() {}\n");
+    let denied = run(&workspace, "touch should-not-exist", b"n\n");
+    assert!(!denied.status.success()); assert!(!workspace.path().join("should-not-exist").exists());
+    let failed = run(&workspace, "printf test-failure >&2; exit 1", b"y\nn\n");
+    assert!(!failed.status.success()); let text = stdout(&failed);
+    assert!(text.contains("test-failure")); assert!(text.contains("Send file and diagnostic to Ollama"));
+    assert!(stderr(&failed).contains("model request cancelled"));
+    let passed = run(&workspace, "exit 0", b"y\n");
+    assert!(passed.status.success(), "{}", stderr(&passed));
+    assert!(stdout(&passed).contains("No retry was requested"));
+    assert!(!stdout(&passed).contains("Send file and diagnostic to Ollama"));
+    assert_eq!(fs::read_to_string(workspace.path().join("source.rs")).unwrap(), "fn main() {}\n");
+    assert!(!workspace.path().join(".isa").exists());
+}

@@ -7,6 +7,7 @@ mod context;
 mod agent_loop;
 mod semantic;
 mod edit;
+mod feedback;
 mod registry;
 mod repository;
 mod processes;
@@ -37,6 +38,7 @@ Usage:\n\
   isa-cli symbols <name> [directory]       Find syntax declarations (Rust, Python, JS, TS)\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
+  isa-cli feedback <file> <instruction> -- <program> [args...]  Test and propose a retry\n\
   isa-cli check-edit <proposal-file> [directory]  Check one proposal without writing\n\
   isa-cli apply-edit <proposal-file> [directory]  Review one SEARCH/REPLACE block\n\
   isa-cli propose-edit <file> <instruction> [directory]  Generate and review one edit\n\
@@ -162,6 +164,13 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let new = args.get(3).ok_or("missing replacement text")?;
             let root = directory(&args, 4)?;
             edit::replace(&root, std::path::Path::new(&file), &old, new)?;
+        }
+        Some("feedback") => {
+            let file = argument(&args, 1, "file")?;
+            let instruction = argument(&args, 2, "instruction")?;
+            if args.get(3).map(String::as_str) != Some("--") || args.len() < 5 { return Err("usage: isa-cli feedback <file> <instruction> -- <program> [args...]".into()); }
+            let root = directory(&args, args.len())?;
+            feedback::interactive(&root, std::path::Path::new(&file), &instruction, &args[4..])?;
         }
         Some("check-edit") => {
             if args.len() > 3 { return Err("usage: isa-cli check-edit <proposal-file> [directory]".into()); }

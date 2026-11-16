@@ -302,6 +302,26 @@ In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
 requesting final approval; detected errors do not automatically apply or block a
 change. The user remains responsible for the decision and for running tests.
 
+### One authorized test and feedback proposal (CLI)
+
+From the workspace, run `isa-cli feedback <file> <instruction> -- <program> [args...]`.
+ISA shows the exact program and arguments and requires terminal approval before
+running it once. It does not insert a shell; explicitly choosing a shell still
+allows arbitrary commands. The test runs in the real workspace with the user's
+permissions, inherited environment and network access: **there is no sandbox**.
+It can modify files, leak data or leave background processes. The 60-second
+best-effort timeout kills the process group, but escaped descendants may survive.
+
+ISA shows bounded stdout/stderr tails, exit status, timeout and truncation. On
+failure or incomplete output it displays the exact diagnostic to share, then separately asks permission
+to send it and the current complete target file (at most 24 KiB) to Ollama for
+one SEARCH/REPLACE proposal. Logs and source may contain secrets or adversarial
+instructions. The retry is never applied or saved automatically; copy the block
+into a proposal file to use `check-edit` and the separately approved `apply-edit`.
+The result may be wrong, the file may change afterwards, and a zero exit code is
+not proof of correctness. This is one manual iteration, not an autonomous test
+loop, and is not available through the web agent. Unix only.
+
 ### Read-only web proposal generation
 
 The composer’s **Propose edit** button opens a separate dialog. Enter an existing
