@@ -27,8 +27,9 @@ It supplies excerpts of at most three matching skills, up to 1,500 characters
 each, as explicitly untrusted reference data. This simple lexical selection can
 miss relevant skills or choose irrelevant ones. ISA does not follow skill
 references, run imported agents or commands, grant permissions, or install
-plugin dependencies. A plugin can be disabled for an individual chat; Off
-uses no plugin excerpts. Plugin instructions can still influence a model, so
+plugin dependencies. The imported software-engineering collection is shown as one expandable plugin
+with individual folder switches. Folder choices are saved per conversation; Off
+blocks these switches and uses no plugin excerpts. Plugin instructions can still influence a model, so
 review third-party material before enabling it and do not rely on it as a
 security boundary.
 
