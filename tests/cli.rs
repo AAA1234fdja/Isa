@@ -410,3 +410,11 @@ fn skill_proposals_require_interactive_review() {
     assert!(stderr(&output).contains("interactive terminal"));
     assert!(!workspace.path().join(".isa/skills/test-skill.json").exists());
 }
+
+#[test]
+fn process_supervisor_requires_interactive_approval() {
+    let workspace = Workspace::new();
+    let output = cli(&["processes"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("interactive terminal"));
+}

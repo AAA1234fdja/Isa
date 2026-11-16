@@ -8,6 +8,7 @@ mod semantic;
 mod edit;
 mod registry;
 mod repository;
+mod processes;
 mod session;
 mod summary;
 mod work;
@@ -24,6 +25,7 @@ Usage:\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
+  isa-cli processes [directory]             Supervise approved local processes\n\
   isa-cli skill <command> ...               Manage reusable skills\n\
   isa-cli harness-eval <suite.json> <mode>   Evaluate response harness checks\n\
   isa-cli semantic-index <model> [directory] Build local embedding index\n\
@@ -104,6 +106,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let root = directory(&args, if staged { 2 } else { 1 })?;
             print!("{}", repository::git_diff(&root, staged)?);
         }
+        Some("processes") => { if args.len() > 2 { return Err("usage: isa-cli processes [directory]".into()); } let root = directory(&args, 1)?; processes::interactive(&root)?; }
         Some("skill") => skill_command(&args[1..])?,
         Some("harness-eval") => {
             let suite = argument(&args, 1, "suite file")?;
