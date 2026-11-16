@@ -2,9 +2,9 @@
 
 Settings → Providers lists ISA's built-in Ollama option and lets users add
 custom providers. Choose the provider for each conversation in Chat settings.
-Automatic selects the server-configured Ollama model, not a custom provider.
-Ollama requires `ISA_WEB_MODEL` on the Rust server; otherwise the decoy
-returns a no-provider error.
+Auto tries server-configured Ollama first, then the saved custom providers in
+stored order if the server is unavailable. Ollama requires `ISA_WEB_MODEL` on
+the Rust server. With no usable provider the request returns an error.
 
 Custom providers use the OpenAI-compatible, non-streaming chat-completions
 request and response format. Enter the **full** public HTTPS endpoint (for
@@ -62,8 +62,8 @@ account-specific endpoints may differ from a suggested default. Set up always cr
 unique name (case-insensitive). Edit existing configurations in the saved list.
 Claude is listed separately for discovery and uses Anthropic’s OpenAI-compatible
 endpoint. Multiple configurations may use the same endpoint and different models.
-Agents lists saved custom providers and can start a new chat with one selected;
-it does not create or execute autonomous agents.
+Agents lists saved custom providers and can start a new chat with one selected.
+Pools run bounded model workflows in the browser, not autonomous tool-using agents.
 
 Preset reference pages (checked 2026-11-16):
 
@@ -105,6 +105,37 @@ work and intended synthesis. The connection list removes arrows. Duplicate,
 self-referential and cyclic management connections are rejected. Previously
 saved management connections are migrated into the diagram when it opens.
 Removing a team member removes its nodes and connections. Cancel discards changes.
-Pools and workflows are configuration only: they do not invoke models, apply
-subagent settings, delegate, compare responses, synthesize results, or run agents.
-They are stored in this browser and are not included in chat exports.
+Pools and workflows are stored in this browser and are not included in chat
+exports. Choose a pool using the composer or chat settings to run it. The browser
+runner requires 1–8 nodes and one connected root (an agent or parallel group),
+with no cycles after parallel groups are combined. It evaluates delegated nodes
+before their managers, calls parallel nodes concurrently, and asks the first node
+in each parallel group to synthesize their responses. Agent output is supplied
+to subsequent models as untrusted reference data. Synthesis is a model response,
+not a guaranteed objective evaluation. Subagent instructions and configured
+`min_tokens`, `max_tokens`, and `reasoning_effort` are sent to the provider;
+unsupported parameters may cause errors. Blank values are omitted. Each request
+has a 45-second browser timeout. A failed node fails the pool; cancellation
+aborts browser requests but may not stop remote computation.
+
+The runner does not invoke tools, plugins, or the Rust harness, and does not
+provide sandboxing or autonomous file editing. A pool may make up to 15 model
+requests per message, can incur charges, and sends the chat history, message,
+attachments, and intermediate responses to its participating providers. Auto
+may also send the same data to multiple providers during fallback. ISA asks for
+confirmation before each such send and lists the destinations. Auto retries
+custom providers after network errors, timeout, HTTP 401, 403, 404, 408, 429 and
+5xx; other errors stop fallback. A timeout or network error cannot prove the
+previous provider did not receive the request. Provider keys remain tab-local.
+
+The microphone uses the browser's Web Speech API, when available, with browser
+permission. Speech recognition may send audio to the browser's recognition
+service; ISA asks before starting. Dictation inserts text into the composer and
+does not automatically send it. Real recognition support depends on browser,
+platform, permissions, and network.
+
+Browser routing regression tests (mocked providers, no real API calls): start
+`dev/preview.mjs`, install `playwright-core` and Chromium outside the repository,
+then run `node tests/browser-routing.cjs` and
+`node tests/browser-routing-errors.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and optionally `ISA_TEST_URL` to match the local installation.
