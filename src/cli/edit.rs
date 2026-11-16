@@ -226,7 +226,7 @@ fn mismatch_diagnostic(before: &str, old: &str, new: &str) -> Option<PreviewErro
         None => Some(PreviewError { message: "Search text has no exact match. Suggestions are approximate and cannot be applied automatically.", hints: Some(whitespace_hints(before, old)) }),
         Some(first) => {
             let next = first + before[first..].chars().next()?.len_utf8();
-            if before[next..].contains(old) { Some(PreviewError { message: "Search text matches more than once, including possible overlaps. Expand it to select a unique match.", hints: Some(exact_hints(before, old)) }) } else { None }
+            if before[next..].contains(old) { Some(PreviewError { message: "Search text must match exactly once; it matches more than once, including possible overlaps. Expand it to select a unique match.", hints: Some(exact_hints(before, old)) }) } else { None }
         }
     }
 }
