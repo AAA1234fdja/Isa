@@ -180,11 +180,15 @@ pub fn ollama_stream<F: FnMut(&str) -> Result<()>>(model: &str, messages: &[Mess
 }
 
 pub fn ollama_stream_with_guidance<F: FnMut(&str) -> Result<()>>(model: &str, messages: &[Message], guidance: &str, on_chunk: F) -> Result<String> {
+    ollama_stream_at("http://127.0.0.1:11434/api/chat", model, messages, guidance, on_chunk)
+}
+
+fn ollama_stream_at<F: FnMut(&str) -> Result<()>>(url: &str, model: &str, messages: &[Message], guidance: &str, on_chunk: F) -> Result<String> {
     let mut selected = select_context(messages);
+    if selected.len() <= 1 { return Err("no messages fit in the model context".into()); }
     if !guidance.is_empty() { selected.insert(1, json!({"role": "system", "content": guidance})); }
-    if selected.is_empty() { return Err("no messages fit in the model context".into()); }
     let client = reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(120)).build()?;
-    let response = client.post("http://127.0.0.1:11434/api/chat")
+    let response = client.post(url)
         .json(&json!({"model": model, "messages": selected, "stream": true}))
         .send()?.error_for_status()?;
     consume_stream(std::io::BufReader::new(response), on_chunk)
@@ -193,6 +197,38 @@ pub fn ollama_stream_with_guidance<F: FnMut(&str) -> Result<()>>(model: &str, me
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ollama_http_stream_sends_guidance_and_returns_only_content() {
+        use std::io::{BufRead, BufReader, Read};
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            socket.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            let mut reader = BufReader::new(socket.try_clone().unwrap());
+            let mut line = String::new(); reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("POST /api/chat "));
+            let mut length = 0;
+            loop {
+                line.clear(); reader.read_line(&mut line).unwrap();
+                if line == "\r\n" { break; }
+                if let Some((key, value)) = line.split_once(':') { if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse().unwrap(); } }
+            }
+            let mut body = vec![0; length]; reader.read_exact(&mut body).unwrap();
+            let data: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(data["model"], "test-model"); assert_eq!(data["messages"][1]["content"], "test guidance"); assert_eq!(data["messages"][2]["content"], "user task");
+            let output = b"{\"message\":{\"content\":\"Hello \"},\"done\":false}\n{\"message\":{\"content\":\"world\"},\"done\":true}\n";
+            write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", output.len()).unwrap();
+            socket.write_all(output).unwrap();
+        });
+        let mut streamed = String::new();
+        let result = ollama_stream_at(&format!("http://{address}/api/chat"), "test-model", &[Message::new("user", "user task")], "test guidance", |chunk| { streamed.push_str(chunk); Ok(()) }).unwrap();
+        server.join().unwrap();
+        assert_eq!(result, "Hello world"); assert_eq!(streamed, result);
+        assert!(ollama_stream_at("http://127.0.0.1:1/api/chat", "model", &[], "guidance", |_| Ok(())).is_err());
+    }
 
     #[test]
     fn stream_combines_chunks_and_requires_done() {

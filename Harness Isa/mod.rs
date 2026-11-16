@@ -1,4 +1,5 @@
 use super::{session, Result};
+mod evaluation;
 mod plan;
 mod retrieval;
 use std::path::Path;
@@ -55,6 +56,16 @@ pub fn respond<F: FnMut(&str) -> Result<()>>(root: &Path, model: &str, messages:
     let retrieval = retrieval::Retrieval::parse(&std::env::var("ISA_HARNESS_CONTEXT").unwrap_or_default())?;
     let prepared = retrieval::prepare(root, messages, retrieval)?;
     execute(&mut Ollama, model, &prepared, mode, &mut on_chunk)
+}
+
+pub fn evaluate(path: &Path, model: &str, mode: &str) -> Result<bool> {
+    let parsed = Mode::parse(mode)?;
+    let report = evaluation::run(path, model, mode, |prompt| {
+        let messages = vec![session::Message::new("user", prompt)];
+        execute(&mut Ollama, model, &messages, parsed, &mut |_| Ok(()))
+    })?;
+    println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(report.passed())
 }
 
 #[cfg(test)]

@@ -22,6 +22,7 @@ Usage:\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
+  isa-cli harness-eval <suite.json> <mode>   Evaluate response harness checks\n\
   isa-cli semantic-index <model> [directory] Build local embedding index\n\
   isa-cli semantic-search <query> [directory] Search the embedding index\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
@@ -99,6 +100,13 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let staged = args.get(1).is_some_and(|arg| arg == "--staged");
             let root = directory(&args, if staged { 2 } else { 1 })?;
             print!("{}", repository::git_diff(&root, staged)?);
+        }
+        Some("harness-eval") => {
+            let suite = argument(&args, 1, "suite file")?;
+            let mode = argument(&args, 2, "mode: quick, balanced, or thorough")?;
+            if args.len() != 3 { return Err("usage: isa-cli harness-eval <suite.json> <quick|balanced|thorough>".into()); }
+            let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+            if !harness::evaluate(std::path::Path::new(&suite), &model, &mode)? { return Err("one or more harness evaluation cases failed".into()); }
         }
         Some("semantic-index") => {
             let model = argument(&args, 1, "embedding model")?;
