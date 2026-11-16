@@ -1,6 +1,7 @@
 use std::env;
 mod http;
 mod plugins;
+mod web_supervision;
 #[allow(dead_code)]
 mod cli;
 
@@ -198,6 +199,10 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
+        ("POST", "/api/exec/policy" | "/api/exec/prepare" | "/api/exec/run" | "/api/exec/cancel") => {
+            let (status, body) = web_supervision::handle(path, &request, &stream);
+            (status, "application/json; charset=utf-8", serde_json::to_vec(&body).unwrap_or_default())
+        }
         ("POST", "/api/chat-options") => {
             if !request.is_same_origin_json() {
                 ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())

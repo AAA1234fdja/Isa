@@ -110,7 +110,7 @@ fn run_test(root: &Path, args: &[String], timeout: std::time::Duration) -> Resul
         }
         Ok(false)
     }
-    let child = Command::new(&args[0]).args(&args[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn()?;
+    let child = Command::new(&args[0]).args(&args[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0).spawn()?;
     let mut guard = Guard(child); let mut stdout = guard.0.stdout.take().ok_or("stdout unavailable")?; let mut stderr = guard.0.stderr.take().ok_or("stderr unavailable")?;
     nonblock(stdout.as_raw_fd())?; nonblock(stderr.as_raw_fd())?;
     let deadline = Instant::now() + timeout; let mut out = Vec::new(); let mut err = Vec::new(); let mut truncated = false; let mut out_done = false; let mut err_done = false; let mut timed_out = false;
@@ -135,6 +135,13 @@ fn run_test(root: &Path, args: &[String], timeout: std::time::Duration) -> Resul
         if !(out_done && err_done) { std::thread::sleep(Duration::from_millis(10)); }
     }
     Ok(TestResult { code: status.code(), timed_out, stdout: safe_text(&String::from_utf8_lossy(&out)), stderr: safe_text(&String::from_utf8_lossy(&err)), truncated, pipes_incomplete: !(out_done && err_done) })
+}
+
+// Only called by the opt-in authenticated local web supervisor after policy checks.
+pub fn web_command(root: &Path, command: &str) -> Result<serde_json::Value> {
+    if command.trim().is_empty() || command.len() > 4096 || command.chars().any(|c| (c.is_control() && c != '\n' && c != '\t') || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) { return Err("invalid command".into()); }
+    let result = run_test(root, &["bash".into(), "--noprofile".into(), "--norc".into(), "-c".into(), command.into()], std::time::Duration::from_secs(30))?;
+    Ok(json!({"exitCode":result.code,"timedOut":result.timed_out,"stdout":result.stdout,"stderr":result.stderr,"truncated":result.truncated,"pipesIncomplete":result.pipes_incomplete}))
 }
 
 #[cfg(test)]

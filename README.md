@@ -162,17 +162,56 @@ The composer stores a **per-chat supervision preference**: ask every time,
 ask occasionally (risky or unknown actions), or never ask. New and legacy
 chats default to ask every time; the old global preference is not migrated.
 Selecting never ask requires an explicit confirmation for the current chat.
-These are **UI preferences only**, not enforced permissions: chat cannot run
-commands, MCP tools or skills, and there is no authenticated approval protocol.
-CLI commands, MCP and skills are separate; their existing approvals are not
-changed by this selector. Model data-sharing consent is also separate.
+For the opt-in local manual command executor below, the Rust server enforces the
+registered per-chat policy. All shell commands are considered high-risk: both
+ask modes require individual approval; never ask starts them without another
+approval. The model cannot invoke the executor. MCP tools and skill actions are
+not connected to this web policy; CLI approvals are separate. Model data-sharing
+consent is also separate. No mode makes the browser a sandbox.
 
-Before enabling chat execution, a trusted backend must enforce the selected
-policy for commands, tools and skill actions, conservatively treat unknown
-operations as risky, scope any remembered approvals to the exact action and
-workspace, and handle denial and changes while requests are pending. Browser
-state alone is not authorization. The Node preview and decoy cannot create real
-approval requests. No mode currently makes the browser a sandbox.
+### Opt-in local supervised commands
+
+On Unix only, a user can manually open **Run command** in an existing chat.
+This is disabled by default. Start the Rust server on `127.0.0.1` with an
+explicit trusted workspace and a randomly generated secret, for example:
+
+```sh
+export ISA_WEB_EXEC_WORKSPACE="$PWD"
+export ISA_WEB_EXEC_TOKEN="$(openssl rand -hex 32)"
+cargo run
+```
+
+Enter the token in the dialog on the same local machine; it is retained only in
+page memory until reload and is not saved in the chat. Requests require the
+secret, exact loopback IP/port Host and Origin, local peer, and reject forwarded
+headers. The executor intentionally does **not** work through public preview
+proxies or non-loopback access. Treat the token as a local bearer capability:
+any process or script that obtains it can set policies and authorize commands.
+This is not user authentication against a compromised browser or same-user
+process, and does not replace OS isolation. Do not expose the server or token to
+untrusted clients. Restart the server to clear policies and pending actions.
+
+The server keeps each chat policy in memory and issues a one-use, 120-second
+approval bound to the exact command, workspace and policy version. A policy
+change invalidates pending actions. Denial consumes/cancels an action. In
+occasional mode all shell commands require approval because risk cannot be
+reliably inferred from shell syntax. Never ask executes the manually entered
+command after preparation without a second prompt. The browser never executes
+model-generated text automatically; the user must enter the command. Commands
+run as Bash with the server's permissions and environment, without a sandbox;
+they can read or modify files, access the network, and may spawn descendants.
+The execution token is removed from the child environment, but this does not
+protect it from a hostile same-user process. Output is capped and saved in the
+chat as untrusted text, which later model requests may include. Timeouts and
+closing the dialog are best effort and may not stop descendants or undo side
+effects. Do not blindly retry after a lost response. The Node preview and decoy
+cannot run commands. The server handles at most two concurrent commands.
+
+The browser's local setting is sent to the authenticated server when a manual
+command is prepared; it is not itself an authorization boundary. The server
+cannot distinguish a human click from another bearer using the token. A future
+model-driven executor must use this gate and extend it explicitly for tools and
+skills rather than trusting model output or browser state.
 
 ### Attachments
 
@@ -200,7 +239,7 @@ The configured directory may contain sensitive changes. The server does not auth
 
 `isa-cli processes [directory]` opens an interactive, Unix-only process supervisor. Use `start <name> <bash command>`, `list`, `logs <name>`, `stop <name>`, `remove <name>` (after exit), or `quit`. It starts real background processes in the selected working directory and captures the most recent 64 KiB of combined output in memory. Each new command requires terminal approval; “allow always” applies only to the exact command for the current supervisor session. Denial does not run the command. The supervisor attempts to stop its process groups on exit. Commands run with the user's permissions, without a sandbox, and can access files and the network. Processes that daemonize, escape their process group, or outlive an already-exited group leader may not be stopped automatically. Do not use this as a security isolation mechanism.
 
-The browser has a display component for genuine command and process activity records, but the chat backend **does not yet execute tools or stream those records**. It therefore does not show simulated activity, cannot start or stop these CLI-supervised processes from the browser, and cannot yet automatically suggest an alternative after denial. Browser approval preferences are not connected to this supervisor. The CLI supervisor must stay open to manage its processes; it is not integrated with the Arena live preview system.
+The browser has a display component for genuine command and process activity records. The opt-in manual chat command executor is separate from that activity display; the chat backend **does not yet execute model-requested tools or stream those records**. It therefore does not show simulated activity, cannot start or stop these CLI-supervised processes from the browser, and cannot yet automatically suggest an alternative after denial. Browser approval preferences are not connected to this supervisor. The CLI supervisor must stay open to manage its processes; it is not integrated with the Arena live preview system.
 
 ### Read-only agent loop (experimental)
 

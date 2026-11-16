@@ -488,6 +488,10 @@ pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, S
     Ok((outcome.answer, outcome.steps))
 }
 
+pub fn web_run_command(root: &std::path::Path, command: &str) -> Result<serde_json::Value> {
+    feedback::web_command(root, command)
+}
+
 // The browser server passes only validated conversation roles to this entry point.
 pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<String> {
     let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
