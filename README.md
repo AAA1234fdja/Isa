@@ -54,7 +54,7 @@ cargo run --bin isa-cli -- history my-session .
 
 Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File scanning respects Git ignore rules and excludes several common secret paths, but filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
 
-Semantic indexing, AST-aware context, model tool calling, agent-driven editing, sandboxing, MCP, Git undo, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
+The initial CLI tools do not provide autonomous editing, sandboxing, MCP or a resolved repository graph. See the later sections for the separately implemented semantic index, context summaries, browser routing and read-only agent loop.
 
 ### Design references
 
@@ -192,7 +192,7 @@ The browser has a display component for genuine command and process activity rec
 
 The Rust Ollama runtime can run a bounded model–search–model loop. For the web server, set both `ISA_WEB_MODEL` and `ISA_WEB_AGENT_WORKSPACE` to a trusted directory before starting ISA, then enable **Read-only agent loop** in the chat settings. Each message requires confirmation before workspace excerpts can be sent to Ollama. The browser folder picker does not configure this server directory. For the CLI, set `ISA_AGENT_LOOP=1`; the chat/ask directory is the search workspace. The normal harness is bypassed during loop turns. Resume and goal helper requests do not use the loop.
 
-The model can request at most three distinct lexical workspace searches before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
+The model can request at most three lexical searches or symbol lookups combined before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
 
 ### Reviewed SEARCH/REPLACE proposals
 
@@ -219,3 +219,24 @@ paths, protected paths and oversized or binary targets. This mechanism is not a
 sandbox or a race-free defense against a concurrently modified workspace, and
 `.isa/undo.json` can contain file contents. Multi-file transactions, AST edits,
 automatic model invocation and web approval remain unimplemented.
+
+### Local symbol lookup
+
+`isa-cli symbols <name> [directory]` finds syntax declarations in supported
+Rust, Python and JavaScript files using Tree-sitter. The optional read-only
+Ollama agent loop can request the same lookup within its shared three-lookup
+budget. Results include names, kinds, paths and line numbers, and are treated as
+untrusted data. On the web route, the existing workspace confirmation covers
+sending these results to Ollama. The browser folder picker is not connected to
+the server workspace.
+
+This is an experimental declaration lookup, not a resolved dependency graph,
+reference finder, or a guarantee of correct localization. It does not support
+all syntax or languages (including TypeScript); arrow-function assignments and
+other constructs may be missed. It respects the existing ignore/exclusion rules,
+skips symlinks and bounds individual files, aggregate bytes, visited AST nodes,
+and output; results may be incomplete, including after parse errors or skips.
+The workspace file listing itself has a separate cap. File names and symbols
+can contain sensitive information, and exclusions are not a secret scanner. It
+is not a sandbox or a race-free defense against a changing workspace. Provider
+pools and browser-routed custom providers do not use this backend tool.
