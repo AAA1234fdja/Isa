@@ -40,7 +40,7 @@ falling back to another one.
 
 ## Provider directory
 
-Settings contains a static alphabetical directory of 51 commonly encountered
+Settings contains a static alphabetical directory of 52 commonly encountered
 AI providers and platforms, for discovery rather than a verified popularity
 ranking. Eight rows are visible at a time; scroll the directory for the rest.
 The list does not assert that the provider is connected, that its native API is
@@ -58,8 +58,12 @@ providers with documented public Chat Completions endpoints. The full model ID
 and any API key must still be supplied, and browser CORS support has not been
 verified. No endpoint is auto-connected. Services without a fixed, documented
 compatible endpoint still require a manually supplied URL. Region-specific or
-account-specific endpoints may differ from a suggested default. Existing saved
-providers open in Edit with their stored endpoint rather than replacing it.
+account-specific endpoints may differ from a suggested default. Set up always creates a new configuration; each saved configuration must have a
+unique name (case-insensitive). Edit existing configurations in the saved list.
+Claude is listed separately for discovery and uses Anthropic’s OpenAI-compatible
+endpoint. Multiple configurations may use the same endpoint and different models.
+Agents lists saved custom providers and can start a new chat with one selected;
+it does not create or execute autonomous agents.
 
 Preset reference pages (checked 2026-11-16):
 
