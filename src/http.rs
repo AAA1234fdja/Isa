@@ -2,7 +2,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 
 const MAX_HEADERS: usize = 16 * 1024;
-const MAX_BODY: usize = 128 * 1024;
+const MAX_BODY: usize = 6 * 1024 * 1024;
 
 pub struct Request {
     pub method: String,

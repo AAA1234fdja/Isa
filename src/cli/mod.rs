@@ -402,8 +402,9 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
 }
 
 // The browser server passes only validated conversation roles to this entry point.
-pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, String)]) -> Result<String> {
-    let messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
+pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<String> {
+    let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
+    if let Some(last) = messages.last_mut() { last.images = images; }
     if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
         session::ollama_stream(model, &messages, |_| Ok(()))
     } else {
