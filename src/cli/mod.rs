@@ -34,6 +34,7 @@ Usage:\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
+  isa-cli apply-edit <proposal-file> [directory]  Review one SEARCH/REPLACE block\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli connector github <command>        Manage the GitHub connection\n\
   isa-cli contract <command> ...            Manage subagent contracts\n\
@@ -146,6 +147,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let new = args.get(3).ok_or("missing replacement text")?;
             let root = directory(&args, 4)?;
             edit::replace(&root, std::path::Path::new(&file), &old, new)?;
+        }
+        Some("apply-edit") => {
+            let proposal = argument(&args, 1, "proposal file")?;
+            let root = directory(&args, 2)?;
+            edit::apply_proposal(&root, std::path::Path::new(&proposal))?;
         }
         Some("undo") => {
             let root = directory(&args, 1)?;

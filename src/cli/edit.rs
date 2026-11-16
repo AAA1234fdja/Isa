@@ -1,7 +1,7 @@
 use super::Result;
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 const LIMIT: u64 = 1024 * 1024;
@@ -15,6 +15,7 @@ fn safe_path(root: &Path, relative: &Path) -> Result<PathBuf> {
             _ => return Err("path must be relative and cannot contain parent traversal".into()),
         };
         let name_text = name.to_string_lossy();
+        if name_text.chars().any(char::is_control) { return Err("path cannot contain control characters".into()); }
         if name_text == ".git" || name_text == ".isa" || name_text == ".env" || name_text.starts_with(".env.") || name_text == ".git-credentials" || name_text == ".netrc" {
             return Err("protected paths cannot be edited".into());
         }
@@ -73,7 +74,43 @@ fn atomic_write(path: &Path, data: &[u8], copy_permissions: bool) -> Result<()> 
     result
 }
 
+// One proposal changes one existing file. Delimiters use LF and do not form
+// part of either text; an extra blank line preserves a trailing newline.
+fn parse_proposal(text: &str) -> Result<(&str, &str, &str)> {
+    const PREFIX: &str = "<<<<<<< SEARCH\n";
+    const MIDDLE: &str = "\n=======\n";
+    const END: &str = "\n>>>>>>> REPLACE";
+    let (header, block) = text.split_once('\n').ok_or("missing proposal header")?;
+    let file = header.strip_prefix("File: ").ok_or("expected File: <relative path> header")?;
+    if file.is_empty() || file.len() > 1024 || file.chars().any(char::is_control) { return Err("invalid proposal path".into()); }
+    let block = block.strip_prefix(PREFIX).ok_or("expected SEARCH marker")?;
+    let (search, rest) = block.split_once(MIDDLE).ok_or("expected separator marker")?;
+    let (replacement, trailing) = rest.split_once(END).ok_or("expected REPLACE marker")?;
+    if !matches!(trailing, "" | "\n") || search.contains(MIDDLE) || replacement.contains(MIDDLE) || search.contains(END) || replacement.contains(END) {
+        return Err("proposal must contain exactly one block without extra content or ambiguous markers".into());
+    }
+    if search.is_empty() { return Err("search text cannot be empty".into()); }
+    if search.chars().chain(replacement.chars()).any(|ch| ch.is_control() && ch != '\n' && ch != '\t') {
+        return Err("proposal contains control characters that cannot be reviewed safely".into());
+    }
+    Ok((file, search, replacement))
+}
+
+pub fn apply_proposal(root: &Path, proposal: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(proposal)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 32 * 1024 { return Err("proposal must be a regular file no larger than 32 KiB".into()); }
+    let mut text = String::new();
+    std::fs::File::open(proposal)?.take(32 * 1024 + 1).read_to_string(&mut text)?;
+    if text.len() > 32 * 1024 { return Err("proposal exceeds 32 KiB".into()); }
+    let (file, search, replacement) = parse_proposal(&text)?;
+    replace(root, Path::new(file), search, replacement)
+}
+
 pub fn replace(root: &Path, relative: &Path, old: &str, new: &str) -> Result<()> {
+    replace_with_approval(root, relative, old, new, || confirm("Apply this replacement?"))
+}
+
+fn replace_with_approval(root: &Path, relative: &Path, old: &str, new: &str, approve: impl FnOnce() -> Result<bool>) -> Result<()> {
     if old.is_empty() { return Err("search text cannot be empty".into()); }
     if old.chars().count() > 4000 || new.chars().count() > 4000 { return Err("replacement is too large to review safely (maximum 4000 characters per side)".into()); }
     let path = safe_path(root, relative)?;
@@ -83,7 +120,7 @@ pub fn replace(root: &Path, relative: &Path, old: &str, new: &str) -> Result<()>
     if after == before { return Err("replacement would not change the file".into()); }
     if after.len() as u64 > LIMIT { return Err("result exceeds the 1 MiB limit".into()); }
     println!("File: {}\n--- remove ---\n{}\n--- add ---\n{}", relative.display(), visible(old), visible(new));
-    if !confirm("Apply this replacement?")? { return Err("edit cancelled".into()); }
+    if !approve()? { return Err("edit cancelled".into()); }
     if safe_path(root, relative)? != path || fs::read_to_string(&path)? != before { return Err("file changed while awaiting approval".into()); }
     let dir = backup_dir(root)?;
     let backup = serde_json::to_vec(&json!({"version": 1, "path": relative.to_str().ok_or("path is not UTF-8")?, "before": before, "after": after}))?;
@@ -122,6 +159,55 @@ mod tests {
     #[test]
     fn traversal_is_rejected() {
         assert!(safe_path(Path::new("."), Path::new("../outside")).is_err());
+    }
+
+    #[test]
+    fn parses_single_search_replace_and_preserves_trailing_newlines() {
+        let (file, search, replacement) = parse_proposal("File: src/test.rs\n<<<<<<< SEARCH\nold\n\n=======\nnew\n\n>>>>>>> REPLACE\n").unwrap();
+        assert_eq!((file, search, replacement), ("src/test.rs", "old\n", "new\n"));
+        let (_, old, new) = parse_proposal("File: a\n<<<<<<< SEARCH\nold\n=======\n\n>>>>>>> REPLACE").unwrap();
+        assert_eq!(old, "old"); assert_eq!(new, "");
+    }
+
+    #[test]
+    fn refuses_ambiguous_malformed_and_unreviewable_proposals() {
+        for text in [
+            "File: a\n<<<<<<< SEARCH\n\n=======\nx\n>>>>>>> REPLACE",
+            "File: a\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\nextra",
+            "File: a\n<<<<<<< SEARCH\nx\n=======\ny\n=======\nz\n>>>>>>> REPLACE",
+            "File: a\n<<<<<<< SEARCH\n\x1b[31m\n=======\ny\n>>>>>>> REPLACE",
+            "File: a\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE\nFile: b",
+            "a\n<<<<<<< SEARCH\nx\n=======\ny\n>>>>>>> REPLACE",
+        ] { assert!(parse_proposal(text).is_err(), "unexpectedly accepted {text:?}"); }
+    }
+
+    #[test]
+    fn protected_paths_and_nonunique_search_do_not_change_files() {
+        let root = std::env::temp_dir().join(format!("isa-proposal-test-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("test.txt"); fs::write(&target, "old old").unwrap();
+        assert!(replace(&root, Path::new("test.txt"), "old", "new").is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old old");
+        assert!(safe_path(&root, Path::new(".env")).is_err());
+        assert!(safe_path(&root, Path::new("../escape")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn approval_required_and_concurrent_change_rejected() {
+        let root = std::env::temp_dir().join(format!("isa-proposal-approval-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("test.txt"); fs::write(&target, "old").unwrap();
+        assert!(replace_with_approval(&root, Path::new("test.txt"), "old", "new", || Ok(false)).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "old");
+        assert!(replace_with_approval(&root, Path::new("test.txt"), "old", "new", || { fs::write(&target, "changed")?; Ok(true) }).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "changed");
+        fs::write(&target, "old").unwrap();
+        replace_with_approval(&root, Path::new("test.txt"), "old", "new", || Ok(true)).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+        let undo: Value = serde_json::from_slice(&fs::read(root.join(".isa/undo.json")).unwrap()).unwrap();
+        assert_eq!(undo["before"], "old"); assert_eq!(undo["after"], "new");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

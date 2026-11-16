@@ -193,3 +193,29 @@ The browser has a display component for genuine command and process activity rec
 The Rust Ollama runtime can run a bounded model–search–model loop. For the web server, set both `ISA_WEB_MODEL` and `ISA_WEB_AGENT_WORKSPACE` to a trusted directory before starting ISA, then enable **Read-only agent loop** in the chat settings. Each message requires confirmation before workspace excerpts can be sent to Ollama. The browser folder picker does not configure this server directory. For the CLI, set `ISA_AGENT_LOOP=1`; the chat/ask directory is the search workspace. The normal harness is bypassed during loop turns. Resume and goal helper requests do not use the loop.
 
 The model can request at most three distinct lexical workspace searches before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
+
+### Reviewed SEARCH/REPLACE proposals
+
+The CLI can review one exact replacement from a UTF-8 proposal file:
+
+    File: src/example.rs
+    <<<<<<< SEARCH
+    old text
+    =======
+    new text
+    >>>>>>> REPLACE
+
+Run `cargo run --bin isa-cli -- apply-edit proposal.txt /path/to/workspace`.
+This is a manually initiated CLI operation, not an agent tool or browser
+integration. The proposal accepts exactly one block and an existing, relative
+file path. The delimiter line breaks are not part of the search or replacement;
+add a blank line immediately before a delimiter to include a trailing newline.
+An empty replacement deletes the matched text. Marker lines in the content are
+ambiguous and rejected. The search must match exactly once, and both sides are
+limited to 4,000 characters. ISA displays the change, requires terminal approval,
+checks the file again after approval, and records the prior contents for the
+existing single-edit `undo` command. It refuses unattended execution, symlink
+paths, protected paths and oversized or binary targets. This mechanism is not a
+sandbox or a race-free defense against a concurrently modified workspace, and
+`.isa/undo.json` can contain file contents. Multi-file transactions, AST edits,
+automatic model invocation and web approval remain unimplemented.
