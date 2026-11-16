@@ -1,0 +1,37 @@
+name: Rust checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run Rust tests
+        run: |
+          set +e
+          cargo test --all-targets > /tmp/isa-tests.log 2>&1
+          result=$?
+          cat /tmp/isa-tests.log
+          if [ "$result" -ne 0 ]; then
+            encoded=$(tail -100 /tmp/isa-tests.log | base64 -w0)
+            echo "::error::Rust test diagnostics (base64): $encoded"
+          fi
+          exit "$result"
+      - name: Check release build
+        run: cargo build --release --all-targets
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: isa-linux-binaries
+          path: |
+            target/release/isa
+            target/release/isa-decoy
+          if-no-files-found: error
+          retention-days: 1

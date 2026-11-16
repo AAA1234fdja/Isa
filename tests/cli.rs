@@ -1,0 +1,420 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+
+struct Workspace(PathBuf);
+
+impl Workspace {
+    fn new() -> Self {
+        let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("isa-test-{}-{id}", std::process::id()));
+        fs::create_dir(&path).expect("create test workspace");
+        Self(path)
+    }
+
+    fn path(&self) -> &Path {
+        &self.0
+    }
+
+    fn write(&self, name: &str, contents: &str) {
+        let path = self.0.join(name);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("create parent directory");
+        }
+        fs::write(path, contents).expect("write test file");
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn cli(args: &[&str], workspace: &Workspace) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_isa-cli"))
+        .current_dir(workspace.path())
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("run ISA CLI")
+}
+
+fn stdout(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn stderr(output: &Output) -> String {
+    String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+#[test]
+fn help_describes_available_commands() {
+    let workspace = Workspace::new();
+    let output = cli(&["help"], &workspace);
+    assert!(output.status.success());
+    assert!(stdout(&output).contains("isa-cli search"));
+    assert!(stdout(&output).contains("isa-cli ask"));
+}
+
+#[test]
+fn files_excludes_secret_and_generated_directories() {
+    let workspace = Workspace::new();
+    workspace.write("src/main.rs", "fn main() {}\n");
+    workspace.write(".env", "TOP_SECRET=test\n");
+    workspace.write(".env.local", "TOP_SECRET=test\n");
+    workspace.write("node_modules/library/index.js", "ignored\n");
+    workspace.write(".git/config", "ignored\n");
+    let output = cli(&["files"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let list = stdout(&output);
+    assert!(list.contains("src/main.rs"));
+    assert!(!list.contains(".env"));
+    assert!(!list.contains("node_modules"));
+    assert!(!list.contains(".git"));
+}
+
+
+#[test]
+fn files_respects_gitignore_without_a_git_repository() {
+    let workspace = Workspace::new();
+    workspace.write(".gitignore", "ignored/\n*.secret\n");
+    workspace.write("ignored/file.txt", "ignored");
+    workspace.write("private.secret", "ignored");
+    workspace.write("keep.txt", "included");
+    let output = cli(&["files"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("keep.txt"));
+    assert!(!stdout(&output).contains("ignored/file.txt"));
+    assert!(!stdout(&output).contains("private.secret"));
+}
+
+#[test]
+fn search_reports_matching_lines_without_searching_secrets() {
+    let workspace = Workspace::new();
+    workspace.write("src/lib.rs", "first\nneedle here\nlast\n");
+    workspace.write(".env", "needle hidden\n");
+    let output = cli(&["search", "needle"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("src/lib.rs:2:needle here"));
+    assert!(!stdout(&output).contains("hidden"));
+    assert!(stderr(&output).contains("1 match(es)"));
+}
+
+#[test]
+fn rank_finds_relevant_files() {
+    let workspace = Workspace::new();
+    workspace.write("auth.rs", "fn authenticate() { /* token */ }\n");
+    workspace.write("other.rs", "fn unrelated() {}\n");
+    let output = cli(&["rank", "token"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("auth.rs"));
+    assert!(!stdout(&output).contains("other.rs"));
+}
+
+#[test]
+fn session_ids_reject_path_traversal() {
+    let workspace = Workspace::new();
+    let output = cli(&["history", "../outside"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("session ID"));
+}
+
+#[test]
+fn existing_session_can_be_listed_and_read() {
+    let workspace = Workspace::new();
+    workspace.write(".isa/sessions/example.json", r#"{"version":1,"messages":[{"role":"user","content":"Hello"}]}"#);
+    let sessions = cli(&["sessions"], &workspace);
+    let history = cli(&["history", "example"], &workspace);
+    assert!(sessions.status.success(), "{}", stderr(&sessions));
+    assert!(history.status.success(), "{}", stderr(&history));
+    assert_eq!(stdout(&sessions).trim(), "example");
+    assert!(stdout(&history).contains("user: Hello"));
+}
+
+#[test]
+fn unattended_replace_does_not_modify_files() {
+    let workspace = Workspace::new();
+    workspace.write("example.txt", "original value");
+    let output = cli(&["replace", "example.txt", "original", "changed"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("interactive approval"));
+    assert_eq!(fs::read_to_string(workspace.path().join("example.txt")).unwrap(), "original value");
+}
+
+#[test]
+fn ambiguous_replacement_does_not_modify_files() {
+    let workspace = Workspace::new();
+    workspace.write("example.txt", "same same");
+    let output = cli(&["replace", "example.txt", "same", "changed"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("exactly once"));
+    assert_eq!(fs::read_to_string(workspace.path().join("example.txt")).unwrap(), "same same");
+}
+
+#[test]
+fn replacement_cannot_escape_workspace() {
+    let workspace = Workspace::new();
+    let output = cli(&["replace", "../outside.txt", "old", "new"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("relative"));
+}
+
+#[cfg(unix)]
+#[test]
+fn listing_and_editing_do_not_follow_symlinks() {
+    use std::os::unix::fs::symlink;
+    let workspace = Workspace::new();
+    let outside = Workspace::new();
+    outside.write("secret.txt", "outside value");
+    symlink(outside.path().join("secret.txt"), workspace.path().join("linked.txt")).unwrap();
+    let files = cli(&["files"], &workspace);
+    assert!(!stdout(&files).contains("linked.txt"));
+    let edit = cli(&["replace", "linked.txt", "outside", "changed"], &workspace);
+    assert!(!edit.status.success());
+    assert_eq!(fs::read_to_string(outside.path().join("secret.txt")).unwrap(), "outside value");
+}
+
+#[test]
+fn context_pack_outputs_json_and_marks_sources_untrusted() {
+    let workspace = Workspace::new();
+    workspace.write("auth.rs", "fn authenticate() { token(); }\n");
+    let output = cli(&["pack", "token"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let packed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(packed["sources_are_untrusted"], true);
+    assert_eq!(packed["sources"][0]["path"], "auth.rs");
+}
+
+#[test]
+fn session_search_is_case_insensitive() {
+    let workspace = Workspace::new();
+    workspace.write(".isa/sessions/example.json", r#"{"version":1,"messages":[{"role":"user","content":"Hello ISA"}]}"#);
+    let output = cli(&["session-search", "hello"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("example [user] Hello ISA"));
+}
+
+#[test]
+fn context_pack_ignores_gitignored_files() {
+    let workspace = Workspace::new();
+    workspace.write(".gitignore", "hidden.txt\n");
+    workspace.write("hidden.txt", "needle in a secret file");
+    workspace.write("public.txt", "needle in public file");
+    let output = cli(&["pack", "needle"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("public.txt"));
+    assert!(!stdout(&output).contains("hidden.txt"));
+}
+
+#[test]
+fn git_diff_distinguishes_staged_and_unstaged_changes() {
+    let workspace = Workspace::new();
+    let run_git = |arguments: &[&str]| {
+        let result = Command::new("git").current_dir(workspace.path()).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }).args(arguments).output().expect("run git");
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    };
+    run_git(&["init", "-q"]);
+    workspace.write("tracked.txt", "original\n");
+    run_git(&["add", "tracked.txt"]);
+    run_git(&["-c", "user.name=ISA Test", "-c", "user.email=isa@example.invalid", "commit", "-qm", "initial"]);
+    workspace.write("tracked.txt", "staged change\n");
+    run_git(&["add", "tracked.txt"]);
+    workspace.write("tracked.txt", "unstaged change\n");
+    let staged = cli(&["diff", "--staged"], &workspace);
+    let unstaged = cli(&["diff"], &workspace);
+    assert!(staged.status.success(), "{}", stderr(&staged));
+    assert!(unstaged.status.success(), "{}", stderr(&unstaged));
+    assert!(stdout(&staged).contains("+staged change"));
+    assert!(!stdout(&staged).contains("+unstaged change"));
+    assert!(stdout(&unstaged).contains("+unstaged change"));
+}
+
+#[test]
+fn contracts_and_goals_can_be_created_updated_and_linked() {
+    let workspace = Workspace::new();
+    for args in [
+        vec!["contract", "create", "reviewer", "Review code"],
+        vec!["contract", "set", "reviewer", "deliverables", "Report findings"],
+        vec!["contract", "set", "reviewer", "status", "ready"],
+        vec!["goal", "create", "audit", "Audit the project"],
+        vec!["goal", "bind", "audit", "reviewer"],
+        vec!["goal", "status", "audit", "completed"],
+    ] {
+        let result = cli(&args, &workspace);
+        assert!(result.status.success(), "{}", stderr(&result));
+    }
+    let contract = cli(&["contract", "show", "reviewer"], &workspace);
+    let goal = cli(&["goal", "show", "audit"], &workspace);
+    let contract: serde_json::Value = serde_json::from_slice(&contract.stdout).unwrap();
+    let goal: serde_json::Value = serde_json::from_slice(&goal.stdout).unwrap();
+    assert_eq!(contract["status"], "ready");
+    assert_eq!(contract["deliverables"], "Report findings");
+    assert_eq!(goal["contract_id"], "reviewer");
+    assert_eq!(goal["status"], "completed");
+    assert!(stdout(&cli(&["contract", "list"], &workspace)).contains("reviewer"));
+    assert!(stdout(&cli(&["goal", "list"], &workspace)).contains("audit"));
+}
+
+#[test]
+fn registry_prevents_duplicate_ids_and_invalid_bindings() {
+    let workspace = Workspace::new();
+    assert!(cli(&["goal", "create", "one", "First goal"], &workspace).status.success());
+    assert!(!cli(&["goal", "create", "one", "Other goal"], &workspace).status.success());
+    assert!(!cli(&["goal", "bind", "one", "missing"], &workspace).status.success());
+    assert!(!cli(&["goal", "status", "one", "running"], &workspace).status.success());
+    assert!(!cli(&["contract", "create", "../escape", "Bad ID"], &workspace).status.success());
+    let goal = cli(&["goal", "show", "one"], &workspace);
+    let goal: serde_json::Value = serde_json::from_slice(&goal.stdout).unwrap();
+    assert_eq!(goal["objective"], "First goal");
+    assert_eq!(goal["status"], "open");
+    assert!(goal["contract_id"].is_null());
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_rejects_symlinked_store() {
+    use std::os::unix::fs::symlink;
+    let workspace = Workspace::new();
+    let outside = Workspace::new();
+    symlink(outside.path(), workspace.path().join(".isa")).unwrap();
+    let result = cli(&["contract", "create", "test", "Example"], &workspace);
+    assert!(!result.status.success());
+    assert!(!outside.path().join("contracts").exists());
+}
+
+#[test]
+fn work_status_counts_only_changes_after_start() {
+    let workspace = Workspace::new();
+    workspace.write("existing.txt", "already present\nunchanged\n");
+    let start = cli(&["work", "start"], &workspace);
+    assert!(start.status.success(), "{}", stderr(&start));
+    assert!(!cli(&["work", "start"], &workspace).status.success());
+    workspace.write("existing.txt", "replaced\nunchanged\n");
+    workspace.write("new.txt", "first\nsecond\n");
+    let status = cli(&["work", "status"], &workspace);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let value: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(value["added"], 3);
+    assert_eq!(value["removed"], 1);
+    assert_eq!(value["changed_files"], 2);
+    assert!(cli(&["work", "end"], &workspace).status.success());
+    assert!(!cli(&["work", "status"], &workspace).status.success());
+}
+
+#[test]
+fn work_status_skips_binary_and_ignored_files() {
+    let workspace = Workspace::new();
+    workspace.write(".gitignore", "ignored.txt\n");
+    workspace.write("ignored.txt", "before\n");
+    fs::write(workspace.path().join("binary.dat"), [0, 1, 2]).unwrap();
+    assert!(cli(&["work", "start"], &workspace).status.success());
+    workspace.write("ignored.txt", "after\n");
+    fs::write(workspace.path().join("binary.dat"), [0, 4, 5]).unwrap();
+    let status = cli(&["work", "status"], &workspace);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let value: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(value["added"], 0);
+    assert_eq!(value["removed"], 0);
+    assert_eq!(value["skipped_files"], 1);
+}
+
+#[test]
+fn utility_commands_do_not_modify_cli_conversation() {
+    use std::io::Write;
+    let workspace = Workspace::new();
+    let original = r#"{"version":1,"messages":[{"role":"user","content":"Existing message"}]}"#;
+    workspace.write(".isa/sessions/example.json", original);
+    workspace.write(".isa/summaries/example-AC.md", "Existing summary");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_isa-cli"))
+        .current_dir(workspace.path())
+        .args(["chat", "example"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn().expect("start chat");
+    child.stdin.take().unwrap().write_all(b"./help/.\n./resume-AC/.\n./resume-LP/.\n/quit\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Existing summary"));
+    assert!(stderr(&output).contains("No saved summary"));
+    assert_eq!(fs::read_to_string(workspace.path().join(".isa/sessions/example.json")).unwrap(), original);
+}
+
+#[test]
+fn resume_rejects_invalid_session_ids_and_variants() {
+    let workspace = Workspace::new();
+    assert!(!cli(&["resume", "../outside", "AC"], &workspace).status.success());
+    assert!(!cli(&["resume", "example", "invalid"], &workspace).status.success());
+}
+
+#[test]
+fn decoy_server_reports_missing_provider() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+    }
+    let workspace = Workspace::new();
+    let process = Command::new(env!("CARGO_BIN_EXE_isa-decoy"))
+        .current_dir(workspace.path()).stdout(Stdio::null()).stderr(Stdio::null())
+        .spawn().expect("start decoy");
+    let mut guard = ChildGuard(process);
+    let started = std::time::Instant::now();
+    let mut stream = loop {
+        if started.elapsed() > Duration::from_secs(5) { panic!("decoy did not start in time"); }
+        if let Some(status) = guard.0.try_wait().unwrap() { panic!("decoy exited early: {status}"); }
+        match TcpStream::connect("127.0.0.1:4180") {
+            Ok(stream) => break stream,
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let body = r#"{"message":"Hello"}"#;
+    write!(stream, "POST /v1/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.contains("503 Service Unavailable"), "{response}");
+    let value: serde_json::Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(value["provider"], "decoy");
+    assert_eq!(value["error"]["code"], "no_provider");
+}
+
+#[test]
+fn skill_commands_manage_reviewed_local_guidance() {
+    let workspace = Workspace::new();
+    workspace.write("skill.txt", "Review Rust tests before reporting completion.\n");
+    let output = cli(&["skill", "create", "rust-testing", "skill.txt"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let list = cli(&["skill", "list"], &workspace);
+    assert!(stdout(&list).contains("rust-testing [disabled]"));
+    assert!(cli(&["skill", "enable", "rust-testing"], &workspace).status.success());
+    assert!(stdout(&cli(&["skill", "show", "rust-testing"], &workspace)).contains("[enabled]"));
+    workspace.write("skill.txt", "Updated advice.\n");
+    assert!(cli(&["skill", "edit", "rust-testing", "skill.txt"], &workspace).status.success());
+    assert!(stdout(&cli(&["skill", "show", "rust-testing"], &workspace)).contains("[disabled]"));
+    assert!(cli(&["skill", "delete", "rust-testing"], &workspace).status.success());
+    assert!(stdout(&cli(&["skill", "list"], &workspace)).is_empty());
+}
+
+#[test]
+fn skill_proposals_require_interactive_review() {
+    let workspace = Workspace::new();
+    let output = cli(&["skill", "propose", "test-skill", "Review the task"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("interactive terminal"));
+    assert!(!workspace.path().join(".isa/skills/test-skill.json").exists());
+}
+
+#[test]
+fn process_supervisor_requires_interactive_approval() {
+    let workspace = Workspace::new();
+    let output = cli(&["processes"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("interactive terminal"));
+}

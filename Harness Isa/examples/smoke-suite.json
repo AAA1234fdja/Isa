@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "name": "simple arithmetic",
+      "prompt": "What is 2 plus 2? Answer with the number only.",
+      "contains": ["4"],
+      "max_chars": 20
+    },
+    {
+      "name": "literal format",
+      "prompt": "Reply with only the word HELLO.",
+      "contains": ["hello"],
+      "max_chars": 20
+    }
+  ]
+}
