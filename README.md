@@ -114,3 +114,5 @@ The decoy listens only on `127.0.0.1:4180`. When no real model provider is confi
 When Rust is unavailable, a development-only JavaScript bridge can run the same decoy flow for the preview. Start `node dev/decoy.mjs` and `node dev/preview.mjs` in separate terminals. This bridge is not the production Rust server and does not implement the extension catalog endpoint.
 
 Chat messages display local timestamps. Settings lets users choose United States or Colombia date and time formatting; the clock uses the device time zone. While a request is pending, the send button becomes a stop button and aborts the browser request.
+
+GitHub CLI authorization and planned Google Drive, Gmail, and Notion integrations are documented in [Connector authorization](docs/connectors.md). The browser connector menu is not yet connected to these flows.

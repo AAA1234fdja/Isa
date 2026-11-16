@@ -1,3 +1,4 @@
+mod connectors;
 mod context;
 mod edit;
 mod registry;
@@ -22,6 +23,7 @@ Usage:\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
+  isa-cli connector github <command>        Manage the GitHub connection\n\
   isa-cli contract <command> ...            Manage subagent contracts\n\
   isa-cli goal <command> ...                Manage goals\n\
   isa-cli work <start|status|end> [directory]  Track file changes during work\n\
@@ -115,6 +117,18 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some("undo") => {
             let root = directory(&args, 1)?;
             edit::undo(&root)?;
+        }
+        Some("connector") => {
+            if args.get(1).map(String::as_str) != Some("github") { return Err("only GitHub CLI authorization is implemented; Google Drive, Gmail, and Notion are not connected yet".into()); }
+            match args.get(2).map(String::as_str) {
+                Some("connect") => connectors::connect_github()?,
+                Some("status") => connectors::github_status()?,
+                Some("enable") => connectors::set_github_enabled(true)?,
+                Some("disable") => connectors::set_github_enabled(false)?,
+                Some("whoami") => connectors::github_whoami()?,
+                Some("disconnect") => connectors::disconnect_github()?,
+                _ => return Err("usage: connector github <connect|status|enable|disable|whoami|disconnect>".into()),
+            }
         }
         Some("work") => {
             let action = argument(&args, 1, "work action")?;
