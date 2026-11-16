@@ -237,8 +237,8 @@ member calls. It reports the nearest named enclosing function when available.
 The read-only Ollama loop can request the same lookup. Matches are not resolved:
 identically named methods can refer to unrelated declarations, and dynamic,
 computed or unsupported calls may be missed. It is not a complete call graph.
-The Agent Pool symbol-context option currently shares declarations only, not
-call sites.
+Agent Pools can also request call sites through the optional symbol-context
+setting described below.
 
 This is an experimental syntax lookup, not a resolved dependency graph,
 reference finder, or a guarantee of correct localization. It does not support
@@ -250,7 +250,9 @@ The workspace file listing itself has a separate cap. File names and symbols
 can contain sensitive information, and exclusions are not a secret scanner. It
 is not a sandbox or a race-free defense against a changing workspace. For Agent Pools, set an optional **Pool symbol context** query in chat settings;
 each message then asks for permission before looking up that name on the Rust
-server and sharing at most 15 matching symbols and paths with pool providers.
+server and sharing at most 15 matching declarations or unresolved call sites
+and their paths with pool providers. Choose the lookup type in chat settings;
+call-site queries match the callee name exactly and do not resolve identity.
 A lookup failure stops the pool, and goal/summary helpers do not use this
 context. Clear the query to opt out. The model cannot invoke this lookup itself
 in the pool. Direct custom-provider chats do not use it. The endpoint requires

@@ -167,9 +167,12 @@ but may not stop remote computation.
 Pool agents do not invoke tools, plugins, or the Rust harness, and the runner does
 not provide sandboxing or autonomous file editing. Optionally, a chat can set a
 **Pool symbol context** query: after explicit per-message confirmation, ISA
-asks the configured Rust server to find matching declarations and sends up to
-15 symbol names, kinds, paths and line numbers to pool providers as untrusted
-context. The lookup is bounded and may be incomplete; failure stops the pool.
+asks the configured Rust server to find matching declarations or syntactic call
+sites (selected in chat settings) and sends up to 15 names, paths and line numbers
+to pool providers as untrusted context. Declaration matching is partial and
+case-insensitive; call-site matching is exact and case-sensitive. Call sites are
+unresolved: identical names may refer to unrelated functions, and dynamic calls
+may be missed. The lookup is bounded and may be incomplete; failure stops the pool.
 It requires `ISA_WEB_AGENT_WORKSPACE`, not the browser folder picker, and is not
 used by goal or context-compression helpers. Results may expose sensitive project
 information. The same-origin endpoint is a development feature, not a security

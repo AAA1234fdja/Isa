@@ -468,6 +468,10 @@ pub fn web_symbols(root: &std::path::Path, query: &str) -> Result<serde_json::Va
     symbols::lookup(root, query)
 }
 
+pub fn web_callers(root: &std::path::Path, query: &str) -> Result<serde_json::Value> {
+    symbols::callers(root, query)
+}
+
 // Diff access is read-only and only exposed by the server after explicit configuration.
 pub fn web_changes(root: &std::path::Path) -> Result<serde_json::Value> {
     let staged = repository::git_diff(root, true)?;

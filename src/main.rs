@@ -105,14 +105,18 @@ fn agent_workspace() -> Option<std::path::PathBuf> {
     root.is_dir().then_some(root)
 }
 
-fn parse_symbol_query(body: &[u8]) -> Result<String, &'static str> {
+#[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+enum SymbolMode { #[default] Declarations, Callers }
+
+fn parse_symbol_query(body: &[u8]) -> Result<(String, SymbolMode), &'static str> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct SymbolRequest { query: String }
+    struct SymbolRequest { query: String, #[serde(default)] mode: SymbolMode }
     let parsed: SymbolRequest = serde_json::from_slice(body).map_err(|_| "Invalid symbol request")?;
     let query = parsed.query.trim();
     if query.is_empty() || query.len() > 100 || query.chars().any(char::is_control) { return Err("Invalid symbol query"); }
-    Ok(query.to_owned())
+    Ok((query.to_owned(), parsed.mode))
 }
 
 fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
@@ -189,9 +193,10 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("POST", "/api/symbols") => {
             if !request.is_same_origin_json() {
                 ("403 Forbidden", "application/json", br#"{"error":"Same-origin JSON request required"}"#.to_vec())
-            } else if let Ok(query) = parse_symbol_query(&request.body) {
+            } else if let Ok((query, mode)) = parse_symbol_query(&request.body) {
                 if let Some(root) = agent_workspace() {
-                    match cli::web_symbols(&root, &query) {
+                    let lookup = match mode { SymbolMode::Declarations => cli::web_symbols(&root, &query), SymbolMode::Callers => cli::web_callers(&root, &query) };
+                    match lookup {
                         Ok(result) => ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&result).unwrap_or_default()),
                         Err(error) => { eprintln!("Symbol lookup failed: {error}"); ("502 Bad Gateway", "application/json", br#"{"error":"Symbol lookup failed"}"#.to_vec()) },
                     }
@@ -335,7 +340,9 @@ mod web_chat_tests {
     }
     #[test]
     fn symbol_query_accepts_only_a_bounded_string() {
-        assert_eq!(parse_symbol_query(br#"{"query":" parser "}"#).unwrap(), "parser");
+        assert_eq!(parse_symbol_query(br#"{"query":" parser "}"#).unwrap(), ("parser".to_string(), SymbolMode::Declarations));
+        assert_eq!(parse_symbol_query(br#"{"query":"parse","mode":"callers"}"#).unwrap(), ("parse".to_string(), SymbolMode::Callers));
+        assert!(parse_symbol_query(br#"{"query":"parse","mode":"execute"}"#).is_err());
         assert!(parse_symbol_query(br#"{"query":""}"#).is_err());
         assert!(parse_symbol_query(br#"{"query":"ok","path":"/etc"}"#).is_err());
         assert!(parse_symbol_query(br#"{"query":"bad\nvalue"}"#).is_err());
