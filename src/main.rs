@@ -143,13 +143,15 @@ fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
     };
     if agent_loop {
         let root = agent_workspace().ok_or("Read-only agent loop is not configured on this server.")?;
-        let (answer, steps) = cli::web_agent_loop(&root, model, &messages, images).map_err(|error| { eprintln!("Agent loop failed: {error}"); "Agent loop failed. Check server logs and model compatibility." })?;
-        return serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":answer,"agentSteps":steps})).map_err(|_| "Could not encode response");
+        let (result, usage) = cli::track_web_usage(|| cli::web_agent_loop(&root, model, &messages, images));
+        let (answer, steps) = result.map_err(|error| { eprintln!("Agent loop failed: {error}"); "Agent loop failed. Check server logs and model compatibility." })?;
+        return serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":answer,"agentSteps":steps,"usageCalls":usage})).map_err(|_| "Could not encode response");
     }
     let root = std::env::current_dir().map_err(|_| "Workspace unavailable")?;
-    let reply = cli::web_response(&root, model, &messages, images).map_err(|error| { eprintln!("Local model request failed: {error}"); "Local model or harness request failed. Check server logs and configuration." })?;
+    let (result, usage) = cli::track_web_usage(|| cli::web_response(&root, model, &messages, images));
+    let reply = result.map_err(|error| { eprintln!("Local model request failed: {error}"); "Local model or harness request failed. Check server logs and configuration." })?;
     if reply.len() > 65536 { return Err("Model response exceeded the limit"); }
-    serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":reply})).map_err(|_| "Could not encode response")
+    serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":reply,"usageCalls":usage})).map_err(|_| "Could not encode response")
 }
 
 fn handle_request(mut stream: TcpStream) -> io::Result<()> {

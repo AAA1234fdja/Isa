@@ -411,6 +411,11 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
     Ok(())
 }
 
+// Accounting is scoped to the server request's thread and includes nested harness calls.
+pub fn track_web_usage<T>(work: impl FnOnce() -> Result<T>) -> (Result<T>, Vec<Option<serde_json::Value>>) {
+    session::track_usage(work)
+}
+
 // This loop is separately opted in and is restricted to read-only workspace search.
 pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<(String, Vec<serde_json::Value>)> {
     let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();

@@ -162,14 +162,17 @@ and optionally `ISA_TEST_URL` to match the local installation.
 
 The composer Tokens panel shows per-conversation input, output, cached and total
 counts summed from OpenAI-compatible `usage` objects returned by successful
-custom-provider requests. Pool planning, delegation, parallel, comparison, goal
+custom-provider requests and Ollama chat counters reported by the Rust server. Pool planning, delegation, parallel, comparison, goal
 and compression calls are counted individually when their providers report
 usage. Cached tokens are part of input, not an additional cost. Unknown fields
 are shown as unavailable or incomplete; failures, cancellations and providers
-that do not return usage may still incur costs. The Rust/Ollama server and its
-internal harness calls do not currently expose token usage, and are marked
-unknown rather than estimated. Historical conversations have no retroactive
-usage. Totals may therefore be incomplete.
+that do not return usage may still incur costs. The Rust server reports each
+completed Ollama chat call, including planner, harness and read-only loop calls,
+when Ollama supplies both counters; missing counters and failed internal calls
+are recorded as unknown. Embedding requests are not counted, and a failed or
+cancelled server request cannot return any of its partial usage. Ollama does not
+report cached counts here. Historical conversations have no retroactive usage.
+Totals may therefore be incomplete.
 
 Context is a rough estimate of currently selected conversation text, using UTF-8
 bytes divided by four; it excludes system prompts, attachments, pool instructions
