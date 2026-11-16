@@ -221,15 +221,20 @@ impl Client {
         self.send(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}), deadline)?;
         for _ in 0..=32 {
             let message = self.receive(deadline)?;
-            if message.get("method").is_some() {
-                if message.get("id").is_some() { return Err("MCP server requests are not supported".into()); }
+            if let Some(method) = message.get("method") {
+                let method = method.as_str().ok_or("invalid MCP method")?;
+                if let Some(server_id) = message.get("id") {
+                    if !(server_id.is_string() || server_id.is_i64() || server_id.is_u64()) { return Err("invalid MCP server request ID".into()); }
+                    if method != "ping" { return Err("MCP server requests other than ping are not supported".into()); }
+                    self.send(&json!({"jsonrpc":"2.0","id":server_id,"result":{}}), deadline)?;
+                }
                 continue;
             }
             if message.get("id").and_then(Value::as_u64) != Some(id) { return Err("unexpected MCP response ID".into()); }
             if message.get("error").is_some() { return Err("MCP server returned a JSON-RPC error".into()); }
             return message.get("result").filter(|v| v.is_object()).cloned().ok_or_else(|| "invalid MCP response result".into());
         }
-        Err("too many MCP notifications".into())
+        Err("too many MCP notifications or server requests".into())
     }
     fn initialize(&mut self) -> Result<()> {
         let init = self.request("initialize", json!({"protocolVersion":VERSION,"capabilities":{},"clientInfo":{"name":"isa-cli","version":"0.1.0"}}))?;
@@ -279,6 +284,12 @@ mod tests {
         let (tools, truncated) = client.tools().unwrap(); assert!(!truncated); assert_eq!(tools.len(), 2); assert_eq!(tools[0]["name"], "echo"); assert_eq!(tools[1]["name"], "write");
         let result = client.request("tools/call", json!({"name":"echo","arguments":{"value":"hello"}})).unwrap();
         assert_eq!(result["content"][0]["text"], "fixture result");
+    }
+    #[test]
+    fn answers_server_ping_during_discovery() {
+        let mut client = start("ping"); client.initialize().unwrap();
+        let (tools, truncated) = client.tools().unwrap();
+        assert_eq!(tools.len(), 1); assert!(!truncated); assert_eq!(tools[0]["name"], "echo");
     }
     #[test]
     fn rejects_bad_frames_versions_ids_and_cursor_loops() {

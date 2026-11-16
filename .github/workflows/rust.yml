@@ -13,7 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install locked MCP interoperability test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix tests/mcp-sdk
       - name: Run Rust tests
+        env:
+          ISA_MCP_SDK_TEST: "1"
         run: |
           set +e
           cargo test --all-targets > /tmp/isa-tests.log 2>&1

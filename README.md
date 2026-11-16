@@ -329,8 +329,9 @@ are shown and do not trigger a summary. Results can contain secrets or prompt
 injection, and the model's answer may be inaccurate; inspect them before sharing
 or relying on them. Server metadata and model proposals may contain prompt
 injection or unsafe arguments: review them. The browser cannot invoke MCP. Only stdio and this protocol version
-are supported; HTTP, OAuth, resources, prompts, sampling, server requests and
-persistent sessions are not implemented. Discovery is limited to three pages and
+are supported; HTTP, OAuth, resources, prompts, sampling, server requests other than ping, and
+persistent sessions are not implemented. Server pings receive an empty response
+within the same bounded operation; unsupported server requests fail closed. Discovery is limited to three pages and
 100 tools; calls are refused when discovery is incomplete or the name is not unique. Messages and operation time are bounded. A call can have completed
 before a timeout or interruption, so do not blindly retry it.
 
@@ -343,6 +344,20 @@ stderr is discarded. ISA terminates the server process on normal client exit,
 but cannot guarantee cleanup of all descendants or effects.
 
 Protocol reference: [MCP stdio transport and lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).
+
+CI also runs the interactive CLI against a local fixture built using the official
+MCP TypeScript SDK (pinned in `tests/mcp-sdk/package-lock.json`). It exercises
+real protocol initialization, discovery, approval, calls and tool errors. To
+run that optional interoperability test locally, install Node.js and Rust, then:
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund --prefix tests/mcp-sdk
+ISA_MCP_SDK_TEST=1 cargo test --test cli mcp_official_sdk_stdio_interoperability
+```
+
+This test does not establish compatibility with every MCP server or test an
+actual Ollama model.
+
 
 ### Bounded test-feedback loop (CLI)
 

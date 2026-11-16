@@ -1,3 +1,5 @@
 /target/
 
 /.isa/
+
+/tests/mcp-sdk/node_modules/
