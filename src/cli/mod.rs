@@ -37,6 +37,7 @@ Usage:\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
   isa-cli apply-edit <proposal-file> [directory]  Review one SEARCH/REPLACE block\n\
+  isa-cli propose-edit <file> <instruction> [directory]  Generate and review one edit\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli connector github <command>        Manage the GitHub connection\n\
   isa-cli contract <command> ...            Manage subagent contracts\n\
@@ -52,7 +53,7 @@ Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
 Set ISA_HARNESS=0 to disable response adaptation.\n\
 Set ISA_AGENT_LOOP=1 to enable a bounded read-only workspace search loop.\n\
 Sessions are stored locally under .isa/sessions.\n\
-The model cannot execute commands or make file edits.";
+The model cannot execute commands or edit files without explicit CLI review and approval.";
 
 fn argument(args: &[String], index: usize, name: &str) -> Result<String> {
     args.get(index)
@@ -159,6 +160,14 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let proposal = argument(&args, 1, "proposal file")?;
             let root = directory(&args, 2)?;
             edit::apply_proposal(&root, std::path::Path::new(&proposal))?;
+        }
+        Some("propose-edit") => {
+            if args.len() > 4 { return Err("usage: isa-cli propose-edit <file> <instruction> [directory]".into()); }
+            let file = argument(&args, 1, "file")?;
+            let instruction = argument(&args, 2, "instruction")?;
+            let root = directory(&args, 3)?;
+            let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+            edit::propose_edit(&root, std::path::Path::new(&file), &instruction, &model)?;
         }
         Some("undo") => {
             let root = directory(&args, 1)?;

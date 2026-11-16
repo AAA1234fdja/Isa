@@ -52,7 +52,7 @@ cargo run --bin isa-cli -- ask my-session "Explain Rust ownership" .
 cargo run --bin isa-cli -- history my-session .
 ```
 
-Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File scanning respects Git ignore rules and excludes several common secret paths, but filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
+Sessions are stored in `.isa/sessions` and are not connected to the browser chat. CLI chat does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. The separate `propose-edit` command sends a selected file and applies a reviewed change only after explicit approvals. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File scanning respects Git ignore rules and excludes several common secret paths, but filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
 
 The initial CLI tools do not provide autonomous editing, sandboxing, MCP or a resolved repository graph. See the later sections for the separately implemented semantic index, context summaries, browser routing and read-only agent loop.
 
@@ -211,7 +211,8 @@ integration. The proposal accepts exactly one block and an existing, relative
 file path. The delimiter line breaks are not part of the search or replacement;
 add a blank line immediately before a delimiter to include a trailing newline.
 An empty replacement deletes the matched text. Marker lines in the content are
-ambiguous and rejected. The search must match exactly once, and both sides are
+ambiguous and rejected; control and bidirectional formatting characters in the
+replacement or search are rejected to make review safer. The search must match exactly once, and both sides are
 limited to 4,000 characters. ISA displays the change, requires terminal approval,
 checks the file again after approval, and records the prior contents for the
 existing single-edit `undo` command. It refuses unattended execution, symlink
@@ -246,3 +247,22 @@ context. Clear the query to opt out. The model cannot invoke this lookup itself
 in the pool. Direct custom-provider chats do not use it. The endpoint requires
 same-origin JSON and `ISA_WEB_AGENT_WORKSPACE`; like the rest of the development
 server it is not suitable for public deployment or untrusted local clients.
+
+### Model-generated edit proposal in the CLI
+
+`cargo run --bin isa-cli -- propose-edit src/example.rs "Describe the change" /path/to/workspace`
+asks the configured local Ollama model (`ISA_MODEL`) for one SEARCH/REPLACE
+proposal for the selected existing file. ISA first asks permission to send the
+complete file and instruction to Ollama, then separately displays the proposed
+replacement and asks permission to apply it. A malformed proposal, another file
+path, a non-unique match, a file changed since inference, or denial stops the
+operation. Successful edits use the same single-file undo record as `apply-edit`.
+
+The file is limited to 24 KiB and the instruction to 4,000 bytes; the regular
+proposal and edit limits also apply. This command runs only when explicitly
+invoked from an interactive terminal. It is not available to the browser or as
+an autonomous agent-loop tool. Ollama receives the full file, which may contain
+secrets; exclusion rules are not a secret scanner. The model may produce an
+incorrect or unsafe change even when formatting is valid, so review it before
+approval. There is no sandbox or race-free protection against a concurrently
+modified workspace, no multi-file transaction, and no automatic test execution.
