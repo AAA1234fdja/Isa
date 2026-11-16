@@ -192,7 +192,7 @@ The browser has a display component for genuine command and process activity rec
 
 The Rust Ollama runtime can run a bounded model–search–model loop. For the web server, set both `ISA_WEB_MODEL` and `ISA_WEB_AGENT_WORKSPACE` to a trusted directory before starting ISA, then enable **Read-only agent loop** in the chat settings. Each message requires confirmation before workspace excerpts can be sent to Ollama. The browser folder picker does not configure this server directory. For the CLI, set `ISA_AGENT_LOOP=1`; the chat/ask directory is the search workspace. The normal harness is bypassed during loop turns. Resume and goal helper requests do not use the loop.
 
-The model can request at most three lexical searches or symbol lookups combined before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
+The model can request at most three lexical searches, declaration lookups or call-site lookups combined before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
 
 ### Reviewed SEARCH/REPLACE proposals
 
@@ -231,7 +231,16 @@ untrusted data. On the web route, the existing workspace confirmation covers
 sending these results to Ollama. The browser folder picker is not connected to
 the server workspace.
 
-This is an experimental declaration lookup, not a resolved dependency graph,
+`isa-cli callers <name> [directory]` finds syntactic call sites whose callee
+name exactly matches the query (case-sensitive), including direct and named
+member calls. It reports the nearest named enclosing function when available.
+The read-only Ollama loop can request the same lookup. Matches are not resolved:
+identically named methods can refer to unrelated declarations, and dynamic,
+computed or unsupported calls may be missed. It is not a complete call graph.
+The Agent Pool symbol-context option currently shares declarations only, not
+call sites.
+
+This is an experimental syntax lookup, not a resolved dependency graph,
 reference finder, or a guarantee of correct localization. It does not support
 all syntax or languages (including TypeScript); arrow-function assignments and
 other constructs may be missed. It respects the existing ignore/exclusion rules,

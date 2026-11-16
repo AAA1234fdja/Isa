@@ -1,4 +1,4 @@
-//! A small, bounded syntax-derived symbol lookup. Not a name resolver or call graph.
+//! Bounded syntax-derived declarations and call sites. No semantic name resolution.
 use super::{repository, Result};
 use serde_json::{json, Value};
 use std::fs::{self, File};
@@ -24,7 +24,40 @@ fn declaration(kind: &str) -> bool {
     matches!(kind, "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item" | "mod_item" | "const_item" | "static_item" | "function_definition" | "class_definition" | "function_declaration" | "generator_function_declaration" | "class_declaration" | "method_definition")
 }
 
-pub fn lookup(root: &Path, query: &str) -> Result<Value> {
+#[derive(Clone, Copy)]
+enum Lookup { Declarations, Calls }
+
+fn callable_name<'a>(mut node: tree_sitter::Node<'a>, content: &'a [u8]) -> Option<&'a str> {
+    // Only statically spelled names or member names; computed calls are omitted.
+    for _ in 0..16 {
+        match node.kind() {
+            "identifier" | "field_identifier" | "property_identifier" => return node.utf8_text(content).ok(),
+            "attribute" => node = node.child_by_field_name("attribute")?,
+            "member_expression" => node = node.child_by_field_name("property")?,
+            "field_expression" => node = node.child_by_field_name("field")?,
+            "scoped_identifier" => node = node.child_by_field_name("name")?,
+            "generic_function" => node = node.child_by_field_name("function")?,
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn enclosing_function<'a>(mut node: tree_sitter::Node<'a>, content: &'a [u8]) -> Option<&'a str> {
+    for _ in 0..128 {
+        let parent = node.parent()?;
+        if matches!(parent.kind(), "function_item" | "function_definition" | "function_declaration" | "generator_function_declaration" | "method_definition") {
+            return parent.child_by_field_name("name").and_then(|n| n.utf8_text(content).ok()).filter(|s| s.len() <= 160 && !s.chars().any(char::is_control));
+        }
+        node = parent;
+    }
+    None
+}
+
+pub fn lookup(root: &Path, query: &str) -> Result<Value> { scan(root, query, Lookup::Declarations) }
+pub fn callers(root: &Path, query: &str) -> Result<Value> { scan(root, query, Lookup::Calls) }
+
+fn scan(root: &Path, query: &str, mode: Lookup) -> Result<Value> {
     let query = query.trim();
     if query.is_empty() || query.len() > 100 || query.chars().any(char::is_control) { return Err("symbol query must contain 1 to 100 bytes without control characters".into()); }
     let needle = query.to_lowercase();
@@ -55,21 +88,33 @@ pub fn lookup(root: &Path, query: &str) -> Result<Value> {
         while let Some(node) = pending.pop() {
             if nodes_seen >= MAX_NODES { truncated = true; break; }
             nodes_seen += 1;
-            if declaration(node.kind()) {
-                if let Some(name) = node.child_by_field_name("name").and_then(|n| n.utf8_text(&content).ok()) {
-                    if name.len() <= 160 && !name.chars().any(char::is_control) && name.to_lowercase().contains(&needle) {
-                        results.push(json!({"path":path.to_string_lossy(),"name":name,"kind":node.kind(),"line":node.start_position().row + 1}));
-                        if results.len() >= MAX_MATCHES { truncated = true; break; }
+            match mode {
+                Lookup::Declarations if declaration(node.kind()) => {
+                    if let Some(name) = node.child_by_field_name("name").and_then(|n| n.utf8_text(&content).ok()) {
+                        if name.len() <= 160 && !name.chars().any(char::is_control) && name.to_lowercase().contains(&needle) {
+                            results.push(json!({"path":path.to_string_lossy(),"name":name,"kind":node.kind(),"line":node.start_position().row + 1}));
+                        }
                     }
                 }
+                Lookup::Calls if matches!(node.kind(), "call" | "call_expression") => {
+                    if let Some(name) = node.child_by_field_name("function").and_then(|callee| callable_name(callee, &content)) {
+                        if name == query && name.len() <= 160 && !name.chars().any(char::is_control) {
+                            results.push(json!({"path":path.to_string_lossy(),"callee":name,"caller":enclosing_function(node, &content),"line":node.start_position().row + 1}));
+                        }
+                    }
+                }
+                _ => (),
             }
+            if results.len() >= MAX_MATCHES { truncated = true; break; }
             let mut cursor = node.walk();
             let children: Vec<_> = node.named_children(&mut cursor).collect();
             pending.extend(children.into_iter().rev());
         }
         if truncated { break; }
     }
-    Ok(json!({"version":1,"method":"tree-sitter declarations","query":query,"symbols_are_untrusted":true,"files_scanned":files_scanned,"parse_error_files":parse_errors,"skipped_files":skipped_files,"truncated":truncated,"symbols":results}))
+    let mut value = json!({"version":1,"method":match mode { Lookup::Declarations => "tree-sitter declarations", Lookup::Calls => "tree-sitter call sites" },"query":query,"symbols_are_untrusted":true,"files_scanned":files_scanned,"parse_error_files":parse_errors,"skipped_files":skipped_files,"truncated":truncated});
+    value[match mode { Lookup::Declarations => "symbols", Lookup::Calls => "calls" }] = json!(results);
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -92,6 +137,33 @@ mod tests {
         assert!(lookup(&root, "").is_err());
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn finds_syntactic_call_sites_and_enclosing_functions() {
+        let root = std::env::temp_dir().join(format!("isa-callers-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("a.rs"), "// parse();\nfn work() { parse(); obj.parse(); }\n").unwrap();
+        fs::write(root.join("b.py"), "def work():\n    parse()\n    obj.parse()\n    data['parse']()\n").unwrap();
+        fs::write(root.join("c.js"), "function work() { parse(); obj.parse(); obj['parse'](); }\n").unwrap();
+        let data = callers(&root, "parse").unwrap();
+        let calls = data["calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 6);
+        assert!(calls.iter().all(|item| item["callee"] == "parse" && item["caller"] == "work"));
+        assert_eq!(calls.iter().filter(|item| item["path"] == "b.py").count(), 2);
+        assert!(callers(&root, "PARSE").unwrap()["calls"].as_array().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn call_lookup_marks_truncation_and_unknown_caller() {
+        let root = std::env::temp_dir().join(format!("isa-caller-limits-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("calls.py"), "parse()\n".repeat(50)).unwrap();
+        let data = callers(&root, "parse").unwrap();
+        assert_eq!(data["calls"].as_array().unwrap().len(), MAX_MATCHES);
+        assert_eq!(data["truncated"], true); assert!(data["calls"][0]["caller"].is_null());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn limits_matches_and_ignores_unsupported_extensions() {
         let root = std::env::temp_dir().join(format!("isa-symbol-limits-{}", std::process::id()));
