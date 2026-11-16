@@ -100,14 +100,26 @@ fn parse_proposal(text: &str) -> Result<(&str, &str, &str)> {
     Ok((file, search, replacement))
 }
 
-pub fn apply_proposal(root: &Path, proposal: &Path) -> Result<()> {
+fn read_proposal_file(proposal: &Path) -> Result<String> {
     let metadata = fs::symlink_metadata(proposal)?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 32 * 1024 { return Err("proposal must be a regular file no larger than 32 KiB".into()); }
     let mut text = String::new();
     std::fs::File::open(proposal)?.take(32 * 1024 + 1).read_to_string(&mut text)?;
     if text.len() > 32 * 1024 { return Err("proposal exceeds 32 KiB".into()); }
+    Ok(text)
+}
+
+pub fn apply_proposal(root: &Path, proposal: &Path) -> Result<()> {
+    let text = read_proposal_file(proposal)?;
     let (file, search, replacement) = parse_proposal(&text)?;
     replace(root, Path::new(file), search, replacement)
+}
+
+// Identical read-only validation to the web endpoint; stdout is JSON and is not
+// an authorization to write. A later apply must revalidate and ask approval.
+pub fn check_proposal(root: &Path, proposal: &Path) -> Result<Value> {
+    let text = read_proposal_file(proposal)?;
+    preview_proposal(root, &text).map_err(Into::into)
 }
 
 // Read-only review: returns only the submitted block plus match metadata. It

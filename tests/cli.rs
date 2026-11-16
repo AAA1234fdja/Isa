@@ -418,3 +418,48 @@ fn process_supervisor_requires_interactive_approval() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("interactive terminal"));
 }
+
+#[test]
+fn check_edit_is_read_only_and_rejects_invalid_proposals() {
+    let workspace = Workspace::new();
+    let proposal = "File: src/a.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n";
+    workspace.write("src/a.txt", "first\nold text\n");
+    workspace.write("proposal.txt", proposal);
+    let result = cli(&["check-edit", "proposal.txt"], &workspace);
+    assert!(result.status.success(), "{}", stderr(&result));
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["file"], "src/a.txt");
+    assert_eq!(value["line"], 2);
+    assert_eq!(value["readOnly"], true);
+    assert_eq!(value["search"], "old");
+    assert_eq!(value["replacement"], "new");
+    assert_eq!(fs::read_to_string(workspace.path().join("src/a.txt")).unwrap(), "first\nold text\n");
+    assert_eq!(fs::read_to_string(workspace.path().join("proposal.txt")).unwrap(), proposal);
+    assert!(!workspace.path().join(".isa").exists());
+    workspace.write("src/a.txt", "old old");
+    let failed = cli(&["check-edit", "proposal.txt"], &workspace);
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(!workspace.path().join(".isa").exists());
+    assert_eq!(fs::read_to_string(workspace.path().join("src/a.txt")).unwrap(), "old old");
+    workspace.write("proposal.txt", "File: ../outside\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE");
+    assert!(!cli(&["check-edit", "proposal.txt"], &workspace).status.success());
+    workspace.write("proposal.txt", &"x".repeat(32769));
+    assert!(!cli(&["check-edit", "proposal.txt"], &workspace).status.success());
+    assert!(!cli(&["check-edit", "proposal.txt", ".", "extra"], &workspace).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn check_edit_rejects_symlinked_proposal_and_target() {
+    use std::os::unix::fs::symlink;
+    let workspace = Workspace::new();
+    workspace.write("actual.txt", "old");
+    workspace.write("proposal.txt", "File: link.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE");
+    symlink("actual.txt", workspace.path().join("link.txt")).unwrap();
+    symlink("proposal.txt", workspace.path().join("link-proposal.txt")).unwrap();
+    assert!(!cli(&["check-edit", "proposal.txt"], &workspace).status.success());
+    assert!(!cli(&["check-edit", "link-proposal.txt"], &workspace).status.success());
+    assert_eq!(fs::read_to_string(workspace.path().join("actual.txt")).unwrap(), "old");
+    assert!(!workspace.path().join(".isa").exists());
+}

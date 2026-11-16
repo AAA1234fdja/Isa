@@ -37,6 +37,7 @@ Usage:\n\
   isa-cli symbols <name> [directory]       Find syntax declarations (Rust, Python, JS, TS)\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
+  isa-cli check-edit <proposal-file> [directory]  Check one proposal without writing\n\
   isa-cli apply-edit <proposal-file> [directory]  Review one SEARCH/REPLACE block\n\
   isa-cli propose-edit <file> <instruction> [directory]  Generate and review one edit\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
@@ -161,6 +162,13 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let new = args.get(3).ok_or("missing replacement text")?;
             let root = directory(&args, 4)?;
             edit::replace(&root, std::path::Path::new(&file), &old, new)?;
+        }
+        Some("check-edit") => {
+            if args.len() > 3 { return Err("usage: isa-cli check-edit <proposal-file> [directory]".into()); }
+            let proposal = argument(&args, 1, "proposal file")?;
+            let root = directory(&args, 2)?;
+            let review = edit::check_proposal(&root, std::path::Path::new(&proposal))?;
+            println!("{}", serde_json::to_string_pretty(&review)?);
         }
         Some("apply-edit") => {
             let proposal = argument(&args, 1, "proposal file")?;

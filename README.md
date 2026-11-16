@@ -205,6 +205,15 @@ The CLI can review one exact replacement from a UTF-8 proposal file:
     new text
     >>>>>>> REPLACE
 
+Optionally run `cargo run --bin isa-cli -- check-edit proposal.txt /path/to/workspace`
+first. This non-interactive, read-only check prints a JSON review (including the
+submitted search and replacement) to stdout and exits nonzero on failure. It
+does not contact a model, write files, create undo records, or authorize an edit.
+The proposal file is resolved from the current directory; its target path is
+relative to the workspace. Treat JSON output as potentially sensitive and avoid
+sharing it indiscriminately. A successful check reflects only that moment: the
+file can change later, and `apply-edit` still rechecks and requires approval.
+
 Run `cargo run --bin isa-cli -- apply-edit proposal.txt /path/to/workspace`.
 This is a manually initiated CLI operation, not an agent tool or browser
 integration. The proposal accepts exactly one block and an existing, relative
