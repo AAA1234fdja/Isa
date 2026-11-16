@@ -172,7 +172,7 @@ The upper-right Task overview panel shows the active browser conversation's late
 ISA_WEB_WORKSPACE=/absolute/path/to/repository cargo run --bin isa
 ```
 
-Use Refresh to reload changes. It shows tracked Git diffs only; untracked and ignored files are not included. Binary patches may not show file contents. Each diff is capped at 2 MiB, and display is capped at 200 files per section and 2,000 lines per file. Changes are not attributed specifically to the agent, and revert is not implemented. The browser's folder picker does not select the server workspace. The Node development preview has no Git endpoint and displays an unavailable message.
+Drag the left edge of either panel to resize it; the width is saved in the browser. With the divider focused, use the left/right arrow keys (Shift for larger steps), or Home/End to reach the limits. Use Refresh to reload changes. It shows tracked Git diffs only; untracked and ignored files are not included. Binary patches may not show file contents. Each diff is capped at 2 MiB, and display is capped at 200 files per section and 2,000 lines per file. Changes are not attributed specifically to the agent, and revert is not implemented. The browser's folder picker does not select the server workspace. The Node development preview has no Git endpoint and displays an unavailable message.
 
 The configured directory may contain sensitive changes. The server does not authenticate users; same-origin checks are not a substitute for authentication or protection against DNS rebinding. Enable `ISA_WEB_WORKSPACE` only on a trusted local interface, not a public preview or untrusted network. Without it, no workspace diff is exposed.
 
