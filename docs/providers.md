@@ -40,16 +40,30 @@ falling back to another one.
 
 ## Provider directory
 
-Settings contains a static alphabetical directory of 50 commonly encountered
+Settings contains a static alphabetical directory of 51 commonly encountered
 AI providers and platforms, for discovery rather than a verified popularity
 ranking. Eight rows are visible at a time; scroll the directory for the rest.
 The list does not assert that the provider is connected, that its native API is
-supported by ISA, or that it permits browser CORS. “Set up” only pre-fills the
-provider name in the custom-provider form. Users must supply and verify a
-compatible HTTPS chat-completions URL, model, and any needed key themselves.
+supported by ISA, or that it permits browser CORS. “Set up” opens the custom-provider form and may pre-fill a documented
+endpoint. Users must verify the URL and supply a model and any needed key.
 Ollama is the sole built-in option currently.
 
 Directory references: [LiteLLM provider list](https://github.com/BerriAI/litellm#supported-providers)
 and [AI inference providers comparison](https://infrabase.ai/blog/ai-inference-api-providers-compared).
 Provider names and API capabilities can change; recheck official documentation
 before configuring a provider.
+
+The directory now includes xKiro and offers editable URL suggestions for
+providers with documented public Chat Completions endpoints. The full model ID
+and any API key must still be supplied, and browser CORS support has not been
+verified. No endpoint is auto-connected. Services without a fixed, documented
+compatible endpoint still require a manually supplied URL. Region-specific or
+account-specific endpoints may differ from a suggested default. Existing saved
+providers open in Edit with their stored endpoint rather than replacing it.
+
+Preset reference pages (checked 2026-11-16):
+
+- [xKiro](https://docs.xkiro.com/api/overview/), [OpenAI](https://platform.openai.com/docs/guides/migrate-to-responses), [Anthropic](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk), [Google Gemini](https://ai.google.dev/gemini-api/docs/openai)
+- [Cerebras](https://inference-docs.cerebras.ai/resources/openai), [Cohere](https://docs.cohere.com/docs/compatibility-api), [DeepInfra](https://docs.deepinfra.com/chat/overview), [DeepSeek](https://api-docs.deepseek.com/), [Fireworks AI](https://docs.fireworks.ai/nexus/apis-and-sdks), [Groq](https://console.groq.com/docs/api-reference)
+- [Inception](https://docs.inceptionlabs.ai/get-started), [Mistral AI](https://docs.mistral.ai/api), [Moonshot AI](https://platform.moonshot.ai/docs/api/chat.en-US), [Nebius AI Studio](https://docs.nebius.com/studio/inference/integrations/postman), [Novita AI](https://novita.ai/docs/guides/llm-api), [NVIDIA NIM](https://docs.api.nvidia.com/nim/reference/google-codegemma-7b-infer), [OpenRouter](https://openrouter.ai/docs/api_reference/overview)
+- [SambaNova](https://docs.sambanova.ai/cloud/docs/integrations/vscode), [SiliconFlow](https://docs.siliconflow.com/en/usercases/use-siliconcloud-in-immersive-translate), [Together AI](https://docs.together.ai/docs/chat-overview), [Upstage](https://developers.upstage.ai/docs/apis/chat), [xAI](https://docs.x.ai/developers/model-capabilities/legacy/chat-completions), [Z.ai](https://docs.z.ai/guides/llm/glm-4.6), [Alibaba Cloud Model Studio](https://www.alibabacloud.com/help/tc/model-studio/qwen-api-via-openai-chat-completions).
