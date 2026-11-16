@@ -176,7 +176,18 @@ pool details record the failure; missing work is not presented as completed.
 If all agents in a group fail, its coordinator fails, a non-transient failure
 occurs, or final synthesis fails, the pool may still fail. Cancellation aborts
 browser requests and retry waits but may not stop remote computation. Pool
-responses are not token-streamed; they appear after each provider response completes.
+can optionally stream the final pool response with OpenAI-compatible SSE: enable
+**Stream final pool response** in the specific provider settings only when that
+provider and model support it. It is off by default. Planning, intermediate
+agents, direct chats, goal/summary helpers and final responses from a parallel
+group with only one surviving agent remain non-streaming. Streaming requires
+normal `stop` and `[DONE]` markers; truncated, malformed or unsupported streams
+fail rather than becoming completed answers. Provisional text is displayed only
+in the active chat and is never saved on interruption, Stop or failure. ISA does
+not retry a stream once visible text was received. Provider usage may be missing
+from streamed responses, and CORS must permit SSE. This has been tested with
+simulated providers, not real provider endpoints.
+
 While a pool is running, the chat displays live, transient status for provider
 requests, retries and pending request count. Status is per chat, not a model
 response, and is cleared on completion or Stop. Parallel events can arrive in
@@ -214,7 +225,7 @@ Browser routing regression tests (mocked providers, no real API calls): start
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
 `node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
-and `node tests/browser-context-errors.cjs`. The dependency-free runtime regressions can be run with `node tests/pool-runtime.cjs` and `node tests/pool-resilience.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and `node tests/browser-context-errors.cjs`. The dependency-free runtime regressions can be run with `node tests/pool-runtime.cjs` and `node tests/pool-resilience.cjs` and `node tests/pool-stream.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
 
 

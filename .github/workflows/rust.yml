@@ -26,6 +26,9 @@ jobs:
           node tests/pool-runtime.cjs
           node tests/pool-resilience.cjs
           node tests/pool-progress.cjs
+          node tests/pool-stream.cjs
+          node tests/pool-stream-ui.cjs
+          node tests/provider-budget-ui.cjs
       - name: Run Rust tests
         env:
           ISA_MCP_SDK_TEST: "1"
