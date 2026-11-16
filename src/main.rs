@@ -1,0 +1,103 @@
+use std::env;
+use std::io::{self, Read, Write};
+use std::net::{TcpListener, TcpStream};
+
+// Embedded assets are a fallback when running outside the project directory.
+const INTERFACE: &str = include_str!("../index.html");
+const LOGO: &[u8] = include_bytes!("../assets/isa-logo.png");
+
+// Decode query parameters without treating user input as a URL or a filesystem path.
+fn decode_query(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut output = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => output.push(b' '),
+            b'%' => {
+                if i + 2 >= bytes.len() { return None; }
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+                output.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 2;
+            }
+            byte => output.push(byte),
+        }
+        i += 1;
+    }
+    String::from_utf8(output).ok()
+}
+
+fn search_extensions(query: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("ISA-preview/0.1")
+        .build().map_err(|e| e.to_string())?;
+    let response = client.get("https://open-vsx.org/api/-/search")
+        .query(&[("query", query), ("size", "20")])
+        .send().and_then(|r| r.error_for_status()).map_err(|e| e.to_string())?;
+    let data: serde_json::Value = response.json().map_err(|e| e.to_string())?;
+    serde_json::to_vec(&data).map_err(|e| e.to_string())
+}
+
+fn handle_request(mut stream: TcpStream) -> io::Result<()> {
+    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
+    let mut buffer = [0; 4096];
+    let read = stream.read(&mut buffer)?;
+    let request = String::from_utf8_lossy(&buffer[..read]);
+    let mut parts = request.lines().next().unwrap_or("").split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    let (path, query_string) = target.split_once('?').unwrap_or((target, ""));
+
+    // Read the development assets on each request so the browser can detect edits.
+    // Only explicit paths are served; arbitrary filesystem access is not allowed.
+    let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
+        ("GET", "/api/extensions") => {
+            let raw = query_string.split('&').find_map(|part| part.strip_prefix("q=")).unwrap_or("");
+            match decode_query(raw) {
+                Some(query) if query.len() <= 200 => match search_extensions(&query) {
+                    Ok(data) => ("200 OK", "application/json; charset=utf-8", data),
+                    Err(error) => {
+                        eprintln!("Open VSX request failed: {error}");
+                        ("502 Bad Gateway", "application/json; charset=utf-8", b"{\"error\":\"Extension catalog unavailable\"}".to_vec())
+                    }
+                },
+                _ => ("400 Bad Request", "application/json; charset=utf-8", b"{\"error\":\"Invalid query\"}".to_vec()),
+            }
+        },
+        ("GET" | "HEAD", "/" | "/index.html") => (
+            "200 OK", "text/html; charset=utf-8",
+            std::fs::read("index.html").unwrap_or_else(|_| INTERFACE.as_bytes().to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/isa-logo.png") => (
+            "200 OK", "image/png",
+            std::fs::read("assets/isa-logo.png").unwrap_or_else(|_| LOGO.to_vec()),
+        ),
+        ("GET" | "HEAD", _) => ("404 Not Found", "text/plain; charset=utf-8", b"Not found".to_vec()),
+        _ => ("405 Method Not Allowed", "text/plain; charset=utf-8", b"Method not allowed".to_vec()),
+    };
+    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\n\r\n", body.len())?;
+    if method != "HEAD" {
+        stream.write_all(&body)?;
+    }
+    Ok(())
+}
+
+fn main() -> io::Result<()> {
+    let address = env::var("ISA_ADDRESS").unwrap_or_else(|_| "127.0.0.1:4174".to_owned());
+    let listener = TcpListener::bind(&address)?;
+    println!("ISA preview listening on http://{address}");
+    for connection in listener.incoming() {
+        match connection {
+            Ok(stream) => {
+                std::thread::spawn(move || {
+                    if let Err(error) = handle_request(stream) {
+                        eprintln!("Request failed: {error}");
+                    }
+                });
+            }
+            Err(error) => eprintln!("Connection failed: {error}"),
+        }
+    }
+    Ok(())
+}
