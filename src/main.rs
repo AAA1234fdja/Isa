@@ -98,6 +98,13 @@ fn parse_web_chat(body: &[u8]) -> Result<(Vec<(String, String)>, Vec<String>), &
     Ok((messages, images))
 }
 
+fn agent_workspace() -> Option<std::path::PathBuf> {
+    let path = env::var("ISA_WEB_AGENT_WORKSPACE").ok()?;
+    if path.trim().is_empty() { return None; }
+    let root = std::path::Path::new(&path).canonicalize().ok()?;
+    root.is_dir().then_some(root)
+}
+
 fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
     let (mut messages, images) = parse_web_chat(body)?;
     let options: serde_json::Value = serde_json::from_slice(body).map_err(|_| "Invalid request")?;
@@ -130,6 +137,15 @@ fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
         }
     }
     if !images.is_empty() && !supports_vision(model)? { return Err("The configured Ollama model does not report vision support. Choose a vision-capable model."); }
+    let agent_loop = match options.get("settings").and_then(|settings| settings.get("agentLoop")) {
+        None => false,
+        Some(value) => value.as_bool().ok_or("Invalid agent loop setting")?,
+    };
+    if agent_loop {
+        let root = agent_workspace().ok_or("Read-only agent loop is not configured on this server.")?;
+        let (answer, steps) = cli::web_agent_loop(&root, model, &messages, images).map_err(|error| { eprintln!("Agent loop failed: {error}"); "Agent loop failed. Check server logs and model compatibility." })?;
+        return serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":answer,"agentSteps":steps})).map_err(|_| "Could not encode response");
+    }
     let root = std::env::current_dir().map_err(|_| "Workspace unavailable")?;
     let reply = cli::web_response(&root, model, &messages, images).map_err(|error| { eprintln!("Local model request failed: {error}"); "Local model or harness request failed. Check server logs and configuration." })?;
     if reply.len() > 65536 { return Err("Model response exceeded the limit"); }
@@ -155,7 +171,7 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
                 let root = std::env::current_dir().unwrap_or_default();
                 let catalog = plugins::catalog(&root);
                 let available = env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty());
-                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"ollamaConfigured":available,"pluginRuntime":true,"catalog":catalog})).unwrap_or_default())
+                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
             }
         },
         ("POST", "/api/changes") => {
@@ -288,6 +304,11 @@ mod web_chat_tests {
         assert!(parse_web_chat(&serde_json::to_vec(&invalid_image).unwrap()).is_err());
         let large = serde_json::json!({"messages":[{"role":"user","text":"test"}],"attachments":[{"name":"large.txt","kind":"text","text":"x".repeat(20481)}]});
         assert!(parse_web_chat(&serde_json::to_vec(&large).unwrap()).is_err());
+    }
+    #[test]
+    fn agent_loop_requires_a_boolean_flag() {
+        let body = serde_json::json!({"messages":[{"role":"user","text":"hello"}],"settings":{"pluginsMode":"off","agentLoop":"true"}});
+        assert_eq!(web_chat(&serde_json::to_vec(&body).unwrap(), "model").unwrap_err(), "Invalid agent loop setting");
     }
     #[test]
     fn rejects_invalid_conversation_before_model_call() {

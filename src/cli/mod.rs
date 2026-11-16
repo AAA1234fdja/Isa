@@ -4,6 +4,7 @@ mod harness;
 mod skills;
 mod connectors;
 mod context;
+mod agent_loop;
 mod semantic;
 mod edit;
 mod registry;
@@ -46,6 +47,7 @@ Usage:\n\
   isa-cli ask <session-id> <prompt> [directory]  Run one local model request\n\n\
 Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
 Set ISA_HARNESS=0 to disable response adaptation.\n\
+Set ISA_AGENT_LOOP=1 to enable a bounded read-only workspace search loop.\n\
 Sessions are stored locally under .isa/sessions.\n\
 The model cannot execute commands or make file edits.";
 
@@ -385,7 +387,12 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
         io::stdout().flush()?;
         Ok(())
     };
-    let reply = if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
+    let reply = if std::env::var("ISA_AGENT_LOOP").as_deref() == Ok("1") {
+        let outcome = agent_loop::run(root, model, messages)?;
+        for step in &outcome.steps { eprintln!("ISA agent loop: {}", step); }
+        display(&outcome.answer)?;
+        outcome.answer
+    } else if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
         session::ollama_stream(model, messages, display)?
     } else {
         harness::respond(root, model, messages, display)?
@@ -402,6 +409,14 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
         }
     }
     Ok(())
+}
+
+// This loop is separately opted in and is restricted to read-only workspace search.
+pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<(String, Vec<serde_json::Value>)> {
+    let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
+    if let Some(last) = messages.last_mut() { last.images = images; }
+    let outcome = agent_loop::run(root, model, &messages)?;
+    Ok((outcome.answer, outcome.steps))
 }
 
 // The browser server passes only validated conversation roles to this entry point.
