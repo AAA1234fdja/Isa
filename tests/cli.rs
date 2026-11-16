@@ -232,3 +232,56 @@ fn git_diff_distinguishes_staged_and_unstaged_changes() {
     assert!(!stdout(&staged).contains("+unstaged change"));
     assert!(stdout(&unstaged).contains("+unstaged change"));
 }
+
+#[test]
+fn contracts_and_goals_can_be_created_updated_and_linked() {
+    let workspace = Workspace::new();
+    for args in [
+        vec!["contract", "create", "reviewer", "Review code"],
+        vec!["contract", "set", "reviewer", "deliverables", "Report findings"],
+        vec!["contract", "set", "reviewer", "status", "ready"],
+        vec!["goal", "create", "audit", "Audit the project"],
+        vec!["goal", "bind", "audit", "reviewer"],
+        vec!["goal", "status", "audit", "completed"],
+    ] {
+        let result = cli(&args, &workspace);
+        assert!(result.status.success(), "{}", stderr(&result));
+    }
+    let contract = cli(&["contract", "show", "reviewer"], &workspace);
+    let goal = cli(&["goal", "show", "audit"], &workspace);
+    let contract: serde_json::Value = serde_json::from_slice(&contract.stdout).unwrap();
+    let goal: serde_json::Value = serde_json::from_slice(&goal.stdout).unwrap();
+    assert_eq!(contract["status"], "ready");
+    assert_eq!(contract["deliverables"], "Report findings");
+    assert_eq!(goal["contract_id"], "reviewer");
+    assert_eq!(goal["status"], "completed");
+    assert!(stdout(&cli(&["contract", "list"], &workspace)).contains("reviewer"));
+    assert!(stdout(&cli(&["goal", "list"], &workspace)).contains("audit"));
+}
+
+#[test]
+fn registry_prevents_duplicate_ids_and_invalid_bindings() {
+    let workspace = Workspace::new();
+    assert!(cli(&["goal", "create", "one", "First goal"], &workspace).status.success());
+    assert!(!cli(&["goal", "create", "one", "Other goal"], &workspace).status.success());
+    assert!(!cli(&["goal", "bind", "one", "missing"], &workspace).status.success());
+    assert!(!cli(&["goal", "status", "one", "running"], &workspace).status.success());
+    assert!(!cli(&["contract", "create", "../escape", "Bad ID"], &workspace).status.success());
+    let goal = cli(&["goal", "show", "one"], &workspace);
+    let goal: serde_json::Value = serde_json::from_slice(&goal.stdout).unwrap();
+    assert_eq!(goal["objective"], "First goal");
+    assert_eq!(goal["status"], "open");
+    assert!(goal["contract_id"].is_null());
+}
+
+#[cfg(unix)]
+#[test]
+fn registry_rejects_symlinked_store() {
+    use std::os::unix::fs::symlink;
+    let workspace = Workspace::new();
+    let outside = Workspace::new();
+    symlink(outside.path(), workspace.path().join(".isa")).unwrap();
+    let result = cli(&["contract", "create", "test", "Example"], &workspace);
+    assert!(!result.status.success());
+    assert!(!outside.path().join("contracts").exists());
+}

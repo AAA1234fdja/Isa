@@ -63,3 +63,23 @@ The Ollama chat streams responses to the terminal. `ask` runs one request withou
 `pack` creates a bounded JSON context bundle using lexical ranking, not embeddings. Repository snippets are untrusted input and must not be treated as instructions. It does not transmit the bundle to a model; review sensitive contents before sharing it. `session-search` searches locally saved CLI sessions.
 
 `diff` explicitly prints tracked unstaged changes; `diff --staged` prints staged changes. Neither includes untracked files or sends changes to a model. Output is limited to 2 MiB and external diff programs and text conversion are disabled. Git access is not a sandbox.
+
+## Subagent contracts and goals
+
+The CLI can manage local contract and goal records:
+
+```sh
+cargo run --bin isa-cli -- contract create reviewer "Review changes for defects"
+cargo run --bin isa-cli -- contract set reviewer instructions "Do not modify files"
+cargo run --bin isa-cli -- contract set reviewer deliverables "A prioritized review"
+cargo run --bin isa-cli -- contract set reviewer status ready
+cargo run --bin isa-cli -- contract list
+cargo run --bin isa-cli -- contract show reviewer
+cargo run --bin isa-cli -- goal create audit "Review the current change"
+cargo run --bin isa-cli -- goal bind audit reviewer
+cargo run --bin isa-cli -- goal status audit completed
+cargo run --bin isa-cli -- goal list
+cargo run --bin isa-cli -- goal show audit
+```
+
+Records live in `.isa/contracts` and `.isa/goals`, are local to the workspace, and are excluded from Git. Supported contract statuses are `draft`, `ready`, and `archived`; goal statuses are `open`, `paused`, and `completed`. A binding is a reference, not a running task. The CLI does not yet start subagents or enforce contract instructions, tool restrictions, budgets, or approvals. Do not rely on these records as a security boundary. The registry is not designed for concurrent writers or hostile processes modifying its files.

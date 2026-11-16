@@ -1,5 +1,6 @@
 mod context;
 mod edit;
+mod registry;
 mod repository;
 mod session;
 
@@ -19,6 +20,8 @@ Usage:\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
+  isa-cli contract <command> ...            Manage subagent contracts\n\
+  isa-cli goal <command> ...                Manage goals\n\
   isa-cli sessions [directory]              List saved sessions\n\
   isa-cli session-search <text> [directory] Search local session messages\n\
   isa-cli history <session-id> [directory]  Show a saved session\n\
@@ -109,6 +112,8 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let root = directory(&args, 1)?;
             edit::undo(&root)?;
         }
+        Some("contract") => contract_command(&args)?,
+        Some("goal") => goal_command(&args)?,
         Some("sessions") => {
             let root = directory(&args, 1)?;
             for id in session::list(&root)? {
@@ -147,6 +152,76 @@ pub fn run(args: Vec<String>) -> Result<()> {
             run_turn(&root, &id, &model, &mut messages, &prompt)?;
         }
         Some(other) => return Err(format!("unknown command: {other}\n\n{HELP}").into()),
+    }
+    Ok(())
+}
+
+fn contract_command(args: &[String]) -> Result<()> {
+    use registry::Kind;
+    match args.get(1).map(String::as_str) {
+        Some("create") => {
+            let id = argument(args, 2, "contract ID")?;
+            let objective = argument(args, 3, "objective")?;
+            let root = directory(args, 4)?;
+            registry::create_contract(&root, &id, &objective)?;
+            println!("Created contract {id} (draft; no agent runtime connected).");
+        }
+        Some("set") => {
+            let id = argument(args, 2, "contract ID")?;
+            let field = argument(args, 3, "field")?;
+            let value = argument(args, 4, "value")?;
+            let root = directory(args, 5)?;
+            registry::set_contract(&root, &id, &field, &value)?;
+            println!("Updated contract {id}.");
+        }
+        Some("show") => {
+            let id = argument(args, 2, "contract ID")?;
+            let root = directory(args, 3)?;
+            println!("{}", serde_json::to_string_pretty(&registry::read(&root, Kind::Contract, &id)?)?);
+        }
+        Some("list") => {
+            let root = directory(args, 2)?;
+            for id in registry::list(&root, Kind::Contract)? { println!("{id}"); }
+        }
+        _ => return Err("usage: contract create <id> <objective> [directory] | set <id> <field> <value> [directory] | show <id> [directory] | list [directory]".into()),
+    }
+    Ok(())
+}
+
+fn goal_command(args: &[String]) -> Result<()> {
+    use registry::Kind;
+    match args.get(1).map(String::as_str) {
+        Some("create") => {
+            let id = argument(args, 2, "goal ID")?;
+            let objective = argument(args, 3, "objective")?;
+            let root = directory(args, 4)?;
+            registry::create_goal(&root, &id, &objective)?;
+            println!("Created goal {id}.");
+        }
+        Some("status") => {
+            let id = argument(args, 2, "goal ID")?;
+            let status = argument(args, 3, "status")?;
+            let root = directory(args, 4)?;
+            registry::set_goal_status(&root, &id, &status)?;
+            println!("Updated goal {id}.");
+        }
+        Some("bind") => {
+            let id = argument(args, 2, "goal ID")?;
+            let contract = argument(args, 3, "contract ID")?;
+            let root = directory(args, 4)?;
+            registry::bind_goal(&root, &id, &contract)?;
+            println!("Linked goal {id} to contract {contract}.");
+        }
+        Some("show") => {
+            let id = argument(args, 2, "goal ID")?;
+            let root = directory(args, 3)?;
+            println!("{}", serde_json::to_string_pretty(&registry::read(&root, Kind::Goal, &id)?)?);
+        }
+        Some("list") => {
+            let root = directory(args, 2)?;
+            for id in registry::list(&root, Kind::Goal)? { println!("{id}"); }
+        }
+        _ => return Err("usage: goal create <id> <objective> [directory] | status <id> <open|paused|completed> [directory] | bind <id> <contract-id> [directory] | show <id> [directory] | list [directory]".into()),
     }
     Ok(())
 }
