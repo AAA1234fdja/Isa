@@ -495,18 +495,21 @@ fn interactive_edit_reports_syntax_before_denied_approval() {
 #[cfg(unix)]
 #[test]
 fn feedback_requires_separate_approvals_and_does_not_edit() {
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::os::fd::FromRawFd;
     fn run(workspace: &Workspace, command: &str, replies: &[u8]) -> Output {
         let mut master = -1; let mut slave = -1;
         assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
         let mut terminal = unsafe { fs::File::from_raw_fd(master) };
         let input = unsafe { fs::File::from_raw_fd(slave) };
+        let output_terminal = input.try_clone().unwrap();
         let child = Command::new(env!("CARGO_BIN_EXE_isa-cli")).current_dir(workspace.path())
             .args(["feedback", "source.rs", "fix it", "--", "sh", "-c", command])
-            .stdin(Stdio::from(input)).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+            .stdin(Stdio::from(input)).stdout(Stdio::from(output_terminal)).stderr(Stdio::piped()).spawn().unwrap();
         terminal.write_all(replies).unwrap();
-        child.wait_with_output().unwrap()
+        let mut output = child.wait_with_output().unwrap();
+        let _ = terminal.read_to_end(&mut output.stdout); // PTY may end with EIO on Linux.
+        output
     }
     let workspace = Workspace::new(); workspace.write("source.rs", "fn main() {}\n");
     let denied = run(&workspace, "touch should-not-exist", b"n\n");
