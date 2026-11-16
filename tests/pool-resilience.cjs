@@ -8,11 +8,11 @@ const env={URL,DOMException,AbortController,setTimeout,clearTimeout,JSON,Map,Set
 const ok=text=>({choices:[{message:{content:text}}]});
 const single=()=>{env.agentPools=[{id:'p',name:'P',graph:{nodes:[{id:'a',providerId:'custom-a',type:'agent'}],edges:[]}}];calls.length=0};
 const branch=()=>{env.agentPools=[{id:'p',name:'P',graph:{nodes:[{id:'a',providerId:'custom-a',type:'agent'},{id:'b',providerId:'custom-b',type:'agent'}],edges:[{from:'a',to:'b',type:'manage'}]}}];calls.length=0};
-const run=(signal=new AbortController().signal,onUsage)=>env.runAgentPool('p',[{role:'user',text:'solve'}],[],signal,onUsage);
+const run=(signal=new AbortController().signal,onUsage,onProgress)=>env.runAgentPool('p',[{role:'user',text:'solve'}],[],signal,onUsage,onProgress);
 const plan=JSON.stringify({own_subagents:[],tasks:[{id:'b',task:'inspect',subagents:[]}]});
 (async()=>{
  const timeout=await env.withRequestTimeout(new AbortController().signal,signal=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError')))),10);assert(timeout.error&&timeout.transient);
- single();let attempts=0,usage=[];handler=()=>++attempts<3?{status:429}:ok('recovered');let result=await run(undefined,u=>usage.push(u));assert(!result.error);assert.equal(attempts,3);assert.equal(usage.length,3);assert.equal(result.poolTrace.filter(x=>x.startsWith('Retry ')).length,2);
+ single();let attempts=0,usage=[],progress=[];handler=()=>++attempts<3?{status:429}:ok('recovered');let result=await run(undefined,u=>usage.push(u),e=>progress.push(e));assert(progress.some(x=>x.includes('Retry scheduled')));assert(progress.some(x=>x.includes('attempt 3 of 3')));assert(progress.at(-1).includes('0 pool request(s) pending'));assert(!result.error);assert.equal(attempts,3);assert.equal(usage.length,3);assert.equal(result.poolTrace.filter(x=>x.startsWith('Retry ')).length,2);
  single();handler=()=>({status:401});result=await run();assert(result.error);assert.equal(calls.length,1);
  single();handler=()=>({status:429,retryAfter:'60'});result=await run();assert(result.error);assert.equal(calls.length,1);assert(result.poolTrace.some(x=>x.includes('Retry-After exceeds')));
  branch();handler=(url,body)=>url.includes('b.example')?{status:503}:ok(body.messages.at(-1).content.includes('Delegate the user request')?plan:'manager answer');result=await run();assert(!result.error);assert.match(result.text,/Partial: one or more branches unavailable/);assert.match(result.text,/work is missing/);assert.equal(calls.filter(c=>c.url.includes('b.example')).length,3);assert(calls.at(-1).body.messages.at(-1).content.includes('UNAVAILABLE'));assert(result.poolTrace.some(x=>x.includes('Unavailable branch')));
@@ -21,6 +21,6 @@ const plan=JSON.stringify({own_subagents:[],tasks:[{id:'b',task:'inspect',subage
  handler=url=>url.includes('b.example')?{status:503}:ok('surviving answer');result=await run();assert(!result.error);assert.match(result.text,/Partial/);assert.match(result.text,/surviving answer/);assert(result.poolTrace.some(x=>x.includes('Unavailable agent')));
  calls.length=0;handler=()=>({status:503});result=await run();assert(result.error);assert.equal(calls.length,6);
  single();let network=0;handler=()=>{if(++network===1)throw new TypeError('network down');return ok('recovered network')};result=await run();assert(!result.error);assert.equal(network,2);
- single();const controller=new AbortController();handler=()=>{setTimeout(()=>controller.abort(),20);return {status:429}};await assert.rejects(run(controller.signal),e=>e.name==='AbortError');assert.equal(calls.length,1);
+ single();const controller=new AbortController();const stoppedProgress=[];handler=()=>{setTimeout(()=>controller.abort(),20);return {status:429}};await assert.rejects(run(controller.signal,undefined,x=>stoppedProgress.push(x)),e=>e.name==='AbortError');assert.equal(calls.length,1);assert(!stoppedProgress.some(x=>x.includes('finished')));
  console.log('Pool bounded retries, Retry-After, partial branch failures and cancellation passed');
 })().catch(e=>{console.error(e);process.exit(1)});

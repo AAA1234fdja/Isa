@@ -176,7 +176,11 @@ pool details record the failure; missing work is not presented as completed.
 If all agents in a group fail, its coordinator fails, a non-transient failure
 occurs, or final synthesis fails, the pool may still fail. Cancellation aborts
 browser requests and retry waits but may not stop remote computation. Pool
-responses are not streamed; they appear after each provider response completes.
+responses are not token-streamed; they appear after each provider response completes.
+While a pool is running, the chat displays live, transient status for provider
+requests, retries and pending request count. Status is per chat, not a model
+response, and is cleared on completion or Stop. Parallel events can arrive in
+any order. The provider may continue working after a browser cancellation.
 
 Pool agents do not invoke tools, plugins, or the Rust harness, and the runner does
 not provide sandboxing or autonomous file editing. Optionally, a chat can set a

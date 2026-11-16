@@ -20,9 +20,12 @@ jobs:
         env:
           JSDOM_PATH: ${{ github.workspace }}/tests/mcp-sdk/node_modules/jsdom
       - name: Test browser pool resilience
+        env:
+          JSDOM_PATH: ${{ github.workspace }}/tests/mcp-sdk/node_modules/jsdom
         run: |
           node tests/pool-runtime.cjs
           node tests/pool-resilience.cjs
+          node tests/pool-progress.cjs
       - name: Run Rust tests
         env:
           ISA_MCP_SDK_TEST: "1"
