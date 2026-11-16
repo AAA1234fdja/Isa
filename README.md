@@ -2,6 +2,8 @@
 
 ISA is an early-stage application. The application logic starts in Rust; the current interface uses HTML, CSS, and JavaScript because it is rendered in a browser. It does not yet connect to an AI agent, open local projects, or produce a desktop application.
 
+Chat provider configuration and credential limitations are documented in [docs/providers.md](docs/providers.md).
+
 ## Run
 
 Install the Rust toolchain, then run:
