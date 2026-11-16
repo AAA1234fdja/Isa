@@ -302,11 +302,12 @@ In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
 requesting final approval; detected errors do not automatically apply or block a
 change. The user remains responsible for the decision and for running tests.
 
-### One authorized test and feedback proposal (CLI)
+### Bounded test-feedback loop (CLI)
 
 From the workspace, run `isa-cli feedback <file> <instruction> -- <program> [args...]`.
 ISA shows the exact program and arguments and requires terminal approval before
-running it once. It does not insert a shell; explicitly choosing a shell still
+each run. It uses the same user-selected command for at most three test runs
+and at most two model proposals. It does not insert a shell; explicitly choosing a shell still
 allows arbitrary commands. The test runs in the real workspace with the user's
 permissions, inherited environment and network access: **there is no sandbox**.
 It can modify files, leak data or leave background processes. The 60-second
@@ -316,11 +317,14 @@ ISA shows bounded stdout/stderr tails, exit status, timeout and truncation. On
 failure or incomplete output it displays the exact diagnostic to share, then separately asks permission
 to send it and the current complete target file (at most 24 KiB) to Ollama for
 one SEARCH/REPLACE proposal. Logs and source may contain secrets or adversarial
-instructions. The retry is never applied or saved automatically; copy the block
-into a proposal file to use `check-edit` and the separately approved `apply-edit`.
-The result may be wrong, the file may change afterwards, and a zero exit code is
-not proof of correctness. This is one manual iteration, not an autonomous test
-loop, and is not available through the web agent. Unix only.
+instructions. ISA displays the proposal and syntax advisory, then requires a
+separate approval to apply it, checks the file snapshot again, and asks again
+before each test rerun. Denial or an error stops the loop; previously applied
+changes are not automatically reverted. The single `undo` record is overwritten
+by each approved edit and can only restore the latest one, if unchanged. The
+result may be wrong, a file can change after checking, and a zero exit code is
+not proof of correctness. This is a bounded, manually approved CLI loop, not an
+autonomous web agent. Unix only. There is no race-free filesystem protection.
 
 ### Read-only web proposal generation
 

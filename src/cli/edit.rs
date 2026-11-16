@@ -225,7 +225,14 @@ pub fn web_propose(root: &Path, relative: &Path, task: &str, model: &str) -> Res
     })
 }
 
+pub(super) struct GeneratedProposal { pub proposal: String, snapshot: String }
+
 pub(super) fn web_propose_with<G>(root: &Path, relative: &Path, task: &str, model: G) -> Result<String>
+where G: FnOnce(&str) -> Result<String> {
+    Ok(generate_with(root, relative, task, model)?.proposal)
+}
+
+pub(super) fn generate_with<G>(root: &Path, relative: &Path, task: &str, model: G) -> Result<GeneratedProposal>
 where G: FnOnce(&str) -> Result<String> {
     let name = relative.to_str().ok_or("invalid path")?;
     if name.is_empty() || name.len() > 1024 || name.chars().any(unsafe_for_review) || task.trim().is_empty() || task.len() > 4000 || task.chars().any(|ch| ch.is_control() && ch != '\n' && ch != '\t') { return Err("invalid file or instruction".into()); }
@@ -241,7 +248,16 @@ where G: FnOnce(&str) -> Result<String> {
     if file != name { return Err("model proposed a different target file".into()); }
     checked_replacement(&source, search, replacement)?;
     if safe_path(root, relative)? != path || read_target(&path)? != source { return Err("file changed during model request".into()); }
-    Ok(proposal)
+    Ok(GeneratedProposal { proposal, snapshot: source })
+}
+
+// Approval happens only after displaying the exact replacement and syntax
+// advisory. Snapshot and file are rechecked before and after approval.
+pub(super) fn apply_generated<F>(root: &Path, relative: &Path, generated: &GeneratedProposal, approve: F) -> Result<()>
+where F: FnOnce() -> Result<bool> {
+    let (file, search, replacement) = parse_proposal(&generated.proposal)?;
+    if Path::new(file) != relative { return Err("proposal target does not match selected file".into()); }
+    replace_with_approval(root, relative, search, replacement, Some(&generated.snapshot), approve)
 }
 
 pub fn propose_edit(root: &Path, relative: &Path, task: &str, model: &str) -> Result<()> {
