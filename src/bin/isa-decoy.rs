@@ -24,9 +24,9 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     if message.trim().is_empty() || message.len() > 64 * 1024 {
         return http::respond(&mut stream, "400 Bad Request", "application/json", br#"{"error":"Message must be 1 to 65536 bytes"}"#, false);
     }
-    let response = json!({"provider":"decoy","role":"assistant","content":"Message received by the decoy provider. No AI provider is configured, so this is an automatic acknowledgement rather than an AI response."});
+    let response = json!({"provider":"decoy","role":"assistant","error":{"code":"no_provider","message":"No AI provider is configured. Connect a provider to continue."}});
     let body = serde_json::to_vec(&response).map_err(io::Error::other)?;
-    http::respond(&mut stream, "200 OK", "application/json; charset=utf-8", &body, false)
+    http::respond(&mut stream, "503 Service Unavailable", "application/json; charset=utf-8", &body, false)
 }
 
 fn main() -> io::Result<()> {

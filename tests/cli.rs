@@ -352,7 +352,7 @@ fn resume_rejects_invalid_session_ids_and_variants() {
 }
 
 #[test]
-fn decoy_server_returns_explicit_non_ai_response() {
+fn decoy_server_reports_missing_provider() {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::time::Duration;
@@ -379,8 +379,8 @@ fn decoy_server_returns_explicit_non_ai_response() {
     write!(stream, "POST /v1/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
-    assert!(response.contains("200 OK"), "{response}");
+    assert!(response.contains("503 Service Unavailable"), "{response}");
     let value: serde_json::Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(value["provider"], "decoy");
-    assert!(value["content"].as_str().unwrap().contains("rather than an AI response"));
+    assert_eq!(value["error"]["code"], "no_provider");
 }

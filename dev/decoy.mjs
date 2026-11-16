@@ -19,7 +19,7 @@ http.createServer((request, response) => {
     try {
       const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
       if (typeof data.message !== 'string' || !data.message.trim() || Buffer.byteLength(data.message) > 65536) return respond(400, {error: 'Invalid message'});
-      respond(200, {provider: 'decoy', role: 'assistant', content: 'Message received by the decoy provider. No AI provider is configured, so this is an automatic acknowledgement rather than an AI response.'});
+      respond(503, {provider: 'decoy', role: 'assistant', error: {code: 'no_provider', message: 'No AI provider is configured. Connect a provider to continue.'}});
     } catch { respond(400, {error: 'Invalid JSON'}); }
   });
 }).listen(4180, '127.0.0.1', () => console.log('Decoy provider listening on 127.0.0.1:4180'));

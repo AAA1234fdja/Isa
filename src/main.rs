@@ -58,9 +58,16 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
                 ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
             } else {
                 let client = reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(std::time::Duration::from_secs(5)).build();
-                let result = client.and_then(|client| client.post("http://127.0.0.1:4180/v1/chat").header("Content-Type", "application/json").body(request.body.clone()).send()?.error_for_status()?.bytes());
+                let result = client.and_then(|client| {
+                    let response = client.post("http://127.0.0.1:4180/v1/chat").header("Content-Type", "application/json").body(request.body.clone()).send()?;
+                    let status = response.status().as_u16();
+                    Ok((status, response.bytes()?))
+                });
                 match result {
-                    Ok(body) if body.len() <= 128 * 1024 => ("200 OK", "application/json; charset=utf-8", body.to_vec()),
+                    Ok((code, body)) if body.len() <= 128 * 1024 => {
+                        let status = match code { 200 => "200 OK", 400 => "400 Bad Request", 503 => "503 Service Unavailable", _ => "502 Bad Gateway" };
+                        (status, "application/json; charset=utf-8", body.to_vec())
+                    }
                     _ => ("502 Bad Gateway", "application/json", b"{\"error\":\"Decoy provider unavailable\"}".to_vec()),
                 }
             }

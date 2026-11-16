@@ -26,10 +26,9 @@ http.createServer(async (request, response) => {
     }
     try {
       const upstream = await fetch('http://127.0.0.1:4180/v1/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:Buffer.concat(chunks), signal:AbortSignal.timeout(5000)});
-      if (!upstream.ok) throw new Error('Provider unavailable');
       const body = await upstream.text();
       if (Buffer.byteLength(body) > 128 * 1024) throw new Error('Response too large');
-      return respond(response, 200, 'application/json; charset=utf-8', body);
+      return respond(response, upstream.status, 'application/json; charset=utf-8', body);
     } catch { return respond(response, 502, 'application/json', '{"error":"Decoy provider unavailable"}'); }
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') return respond(response, 405, 'text/plain', 'Method not allowed');
