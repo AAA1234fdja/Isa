@@ -83,3 +83,9 @@ cargo run --bin isa-cli -- goal show audit
 ```
 
 Records live in `.isa/contracts` and `.isa/goals`, are local to the workspace, and are excluded from Git. Supported contract statuses are `draft`, `ready`, and `archived`; goal statuses are `open`, `paused`, and `completed`. A binding is a reference, not a running task. The CLI does not yet start subagents or enforce contract instructions, tool restrictions, budgets, or approvals. Do not rely on these records as a security boundary. The registry is not designed for concurrent writers or hostile processes modifying its files.
+
+## Chat composer
+
+The browser chat can save up to four UTF-8 text attachments (64 KiB each) with a message in browser local storage. They are not sent to a model or uploaded; do not attach sensitive files on a shared browser. Folder selection, when supported, grants browser read access for the current page session only; no files are read or sent to an agent yet. Voice input uses the browser's Speech Recognition API when available; the browser or its provider may process audio.
+
+Several `./command/.` shortcuts open sections of the browser interface. CLI-backed commands, model selection, approval controls, and AI responses are not connected to the browser chat yet. Unsupported controls remain disabled.
