@@ -1,0 +1,41 @@
+{
+  "plugins": [
+    {
+      "id": "architecture",
+      "count": 13
+    },
+    {
+      "id": "devops",
+      "count": 21
+    },
+    {
+      "id": "docs",
+      "count": 1
+    },
+    {
+      "id": "frontend",
+      "count": 25
+    },
+    {
+      "id": "java",
+      "count": 11
+    },
+    {
+      "id": "node",
+      "count": 11
+    },
+    {
+      "id": "programming-skills",
+      "count": 22
+    },
+    {
+      "id": "python",
+      "count": 20
+    },
+    {
+      "id": "workflow",
+      "count": 4
+    }
+  ],
+  "skillCount": 128
+}
