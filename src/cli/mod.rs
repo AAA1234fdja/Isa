@@ -3,6 +3,7 @@ mod edit;
 mod registry;
 mod repository;
 mod session;
+mod work;
 
 use std::error::Error;
 use std::io::{self, IsTerminal, Write};
@@ -22,6 +23,7 @@ Usage:\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli contract <command> ...            Manage subagent contracts\n\
   isa-cli goal <command> ...                Manage goals\n\
+  isa-cli work <start|status|end> [directory]  Track file changes during work\n\
   isa-cli sessions [directory]              List saved sessions\n\
   isa-cli session-search <text> [directory] Search local session messages\n\
   isa-cli history <session-id> [directory]  Show a saved session\n\
@@ -111,6 +113,19 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some("undo") => {
             let root = directory(&args, 1)?;
             edit::undo(&root)?;
+        }
+        Some("work") => {
+            let action = argument(&args, 1, "work action")?;
+            let root = directory(&args, 2)?;
+            match action.as_str() {
+                "start" => { work::start(&root)?; println!("Work started. Existing files are the baseline."); }
+                "status" => {
+                    let status = work::status(&root)?;
+                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({"added":status.added,"removed":status.removed,"changed_files":status.changed_files,"skipped_files":status.skipped_files}))?);
+                }
+                "end" => { work::end(&root)?; println!("Work ended; baseline removed."); }
+                _ => return Err("usage: work <start|status|end> [directory]".into()),
+            }
         }
         Some("contract") => contract_command(&args)?,
         Some("goal") => goal_command(&args)?,

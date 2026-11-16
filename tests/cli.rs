@@ -285,3 +285,39 @@ fn registry_rejects_symlinked_store() {
     assert!(!result.status.success());
     assert!(!outside.path().join("contracts").exists());
 }
+
+#[test]
+fn work_status_counts_only_changes_after_start() {
+    let workspace = Workspace::new();
+    workspace.write("existing.txt", "already present\nunchanged\n");
+    let start = cli(&["work", "start"], &workspace);
+    assert!(start.status.success(), "{}", stderr(&start));
+    assert!(!cli(&["work", "start"], &workspace).status.success());
+    workspace.write("existing.txt", "replaced\nunchanged\n");
+    workspace.write("new.txt", "first\nsecond\n");
+    let status = cli(&["work", "status"], &workspace);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let value: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(value["added"], 3);
+    assert_eq!(value["removed"], 1);
+    assert_eq!(value["changed_files"], 2);
+    assert!(cli(&["work", "end"], &workspace).status.success());
+    assert!(!cli(&["work", "status"], &workspace).status.success());
+}
+
+#[test]
+fn work_status_skips_binary_and_ignored_files() {
+    let workspace = Workspace::new();
+    workspace.write(".gitignore", "ignored.txt\n");
+    workspace.write("ignored.txt", "before\n");
+    fs::write(workspace.path().join("binary.dat"), [0, 1, 2]).unwrap();
+    assert!(cli(&["work", "start"], &workspace).status.success());
+    workspace.write("ignored.txt", "after\n");
+    fs::write(workspace.path().join("binary.dat"), [0, 4, 5]).unwrap();
+    let status = cli(&["work", "status"], &workspace);
+    assert!(status.status.success(), "{}", stderr(&status));
+    let value: serde_json::Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(value["added"], 0);
+    assert_eq!(value["removed"], 0);
+    assert_eq!(value["skipped_files"], 1);
+}
