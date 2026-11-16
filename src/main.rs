@@ -59,7 +59,8 @@ fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
         messages.push((role.to_owned(), text.to_owned()));
     }
     if messages.last().map(|m| m.0.as_str()) != Some("user") { return Err("Last message must be from the user"); }
-    let reply = cli::web_response(model, &messages).map_err(|error| { eprintln!("Local model request failed: {error}"); "Local Ollama request failed. Check that the configured model is available." })?;
+    let root = std::env::current_dir().map_err(|_| "Workspace unavailable")?;
+    let reply = cli::web_response(&root, model, &messages).map_err(|error| { eprintln!("Local model request failed: {error}"); "Local model or harness request failed. Check server logs and configuration." })?;
     if reply.len() > 65536 { return Err("Model response exceeded the limit"); }
     serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":reply})).map_err(|_| "Could not encode response")
 }

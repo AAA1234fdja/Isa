@@ -337,7 +337,7 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
     let reply = if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
         session::ollama_stream(model, messages, display)?
     } else {
-        harness::respond(model, messages, display)?
+        harness::respond(root, model, messages, display)?
     };
     println!();
     messages.push(session::Message::new("assistant", &reply));
@@ -354,11 +354,11 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
 }
 
 // The browser server passes only validated conversation roles to this entry point.
-pub fn web_response(model: &str, entries: &[(String, String)]) -> Result<String> {
+pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, String)]) -> Result<String> {
     let messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
     if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
         session::ollama_stream(model, &messages, |_| Ok(()))
     } else {
-        harness::respond(model, &messages, |_| Ok(()))
+        harness::respond(root, model, &messages, |_| Ok(()))
     }
 }

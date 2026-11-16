@@ -7,3 +7,17 @@ For each turn it validates the conversation, proposes two fixed guidance strateg
 This uses up to four sequential model calls per turn and can increase latency and compute significantly. CLI summary generation makes additional calls. Set `ISA_HARNESS=0` for a single model call. The harness does not execute tools, edit files, perform fact verification, use the semantic index, persist lessons, dynamically modify its own instructions, or implement recursive optimization. Model critiques are fallible; none of these checks guarantee correctness or resistance to prompt injection. Drafts are truncated before review and composition. A failed streaming final response can already have displayed partial output in the CLI, but is not saved as an assistant message.
 
 The harness runs for `isa-cli chat`, `isa-cli ask`, and the Rust web server when `ISA_WEB_MODEL` is explicitly configured. The Node preview uses the decoy and does not run the harness. The web server returns the final response only after composition rather than streaming. Stopping the browser request does not yet stop server-side model calls. Conversation and drafts are sent to the local Ollama service. Chat history remains locally stored as described in the main README.
+
+## Modes and workspace context
+
+`ISA_HARNESS_MODE` controls the response call budget: `quick` makes one model call with baseline guidance, `balanced` probes two strategies and composes (up to three calls), and `thorough` adds the review (up to four calls, the default). Invalid values are rejected. These are response strategies, not guarantees of answer quality. `ISA_HARNESS=0` bypasses the harness entirely, including retrieval.
+
+Workspace retrieval is **off by default**. To opt in, set `ISA_HARNESS_CONTEXT=lexical` for the existing lexical context pack or `ISA_HARNESS_CONTEXT=semantic` for the local embedding index (first run `isa-cli semantic-index`). There is no automatic fallback: a retrieval error is reported rather than silently changing methods. At most five excerpts of 600 characters are included, with bounded paths and line ranges when available. Excerpts are JSON encoded and marked as untrusted; this reduces but cannot eliminate prompt injection. No retrieved snippets or probe drafts are stored in the chat history, though the model's answer may quote them.
+
+For CLI commands the workspace is the supplied directory; for the Rust web server it is the server's **current working directory**, not the folder selected in the browser. Enabling retrieval shares matching source excerpts with the local Ollama model service, including every probe and review. Ignore rules and excluded paths apply, but secrets within otherwise indexable files cannot be reliably detected. Do not enable this mode on untrusted server deployments, and review the workspace and `.gitignore` first. Semantic retrieval additionally embeds the query using local Ollama, skips stale chunks, and requires the index model to be installed and unchanged. Retrieval is only for grounding responses; it does not authorize tools, edits or autonomous execution.
+
+Example:
+
+```sh
+ISA_HARNESS_MODE=balanced ISA_HARNESS_CONTEXT=semantic isa-cli ask session1 "Where is the HTTP request parsed?" /path/to/workspace
+```
