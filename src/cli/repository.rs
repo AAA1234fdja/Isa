@@ -1,7 +1,8 @@
 use super::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::io::Read;
+use std::process::{Command, Stdio};
 
 const MAX_FILES: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -80,19 +81,50 @@ pub fn search(root: &Path, query: &str) -> Result<Vec<Hit>> {
     Ok(hits)
 }
 
-pub fn git_context(root: &Path) -> Result<String> {
-    let output = Command::new("git")
+const MAX_GIT_OUTPUT: u64 = 2 * 1024 * 1024;
+
+fn git(root: &Path) -> Command {
+    let mut command = Command::new("git");
+    command
         .current_dir(root)
         .env("GIT_CONFIG_NOSYSTEM", "1")
         .env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" })
         .env("GIT_OPTIONAL_LOCKS", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "status", "--short", "--untracked-files=no"])
-        .output()?;
-    if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string().into());
+        .env("GIT_PAGER", "cat")
+        .env("GIT_EXTERNAL_DIFF", "")
+        .args(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "color.ui=false"]);
+    command
+}
+
+fn git_output(mut command: Command) -> Result<String> {
+    let mut child = command.stdout(Stdio::piped()).stderr(Stdio::null()).stdin(Stdio::null()).spawn()?;
+    let stdout = child.stdout.take().ok_or("could not capture git output")?;
+    let mut data = Vec::new();
+    let read_result = stdout.take(MAX_GIT_OUTPUT + 1).read_to_end(&mut data);
+    if read_result.is_err() || data.len() as u64 > MAX_GIT_OUTPUT {
+        let _ = child.kill();
+        let _ = child.wait();
+        read_result?;
+        return Err("git output exceeds the 2 MiB limit".into());
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    let status = child.wait()?;
+    if !status.success() { return Err(format!("git exited with {status}").into()); }
+    Ok(String::from_utf8_lossy(&data).into_owned())
+}
+
+pub fn git_context(root: &Path) -> Result<String> {
+    let mut command = git(root);
+    command.args(["status", "--short", "--untracked-files=no"]);
+    git_output(command)
+}
+
+pub fn git_diff(root: &Path, staged: bool) -> Result<String> {
+    let mut command = git(root);
+    command.args(["diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames"]);
+    if staged { command.arg("--cached"); }
+    command.arg("--");
+    git_output(command)
 }
 
 #[cfg(test)]

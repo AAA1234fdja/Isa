@@ -34,6 +34,8 @@ The Rust CLI is an initial foundation, not a complete coding agent. Run `cargo r
 cargo run --bin isa-cli -- files .
 cargo run --bin isa-cli -- search "TODO" .
 cargo run --bin isa-cli -- context .
+cargo run --bin isa-cli -- diff .
+cargo run --bin isa-cli -- diff --staged .
 cargo run --bin isa-cli -- rank "authentication handler" .
 cargo run --bin isa-cli -- pack "authentication handler" .
 cargo run --bin isa-cli -- session-search "authentication" .
@@ -59,3 +61,5 @@ Semantic indexing, AST-aware context, model tool calling, agent-driven editing, 
 The Ollama chat streams responses to the terminal. `ask` runs one request without an interactive prompt and exits nonzero on failure; it does not execute agent tools. A user message is saved before the request, while an assistant message is saved only after the stream completes. Partial responses are not saved.
 
 `pack` creates a bounded JSON context bundle using lexical ranking, not embeddings. Repository snippets are untrusted input and must not be treated as instructions. It does not transmit the bundle to a model; review sensitive contents before sharing it. `session-search` searches locally saved CLI sessions.
+
+`diff` explicitly prints tracked unstaged changes; `diff --staged` prints staged changes. Neither includes untracked files or sends changes to a model. Output is limited to 2 MiB and external diff programs and text conversion are disabled. Git access is not a sandbox.

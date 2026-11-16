@@ -209,3 +209,26 @@ fn context_pack_ignores_gitignored_files() {
     assert!(stdout(&output).contains("public.txt"));
     assert!(!stdout(&output).contains("hidden.txt"));
 }
+
+#[test]
+fn git_diff_distinguishes_staged_and_unstaged_changes() {
+    let workspace = Workspace::new();
+    let run_git = |arguments: &[&str]| {
+        let result = Command::new("git").current_dir(workspace.path()).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", if cfg!(windows) { "NUL" } else { "/dev/null" }).args(arguments).output().expect("run git");
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    };
+    run_git(&["init", "-q"]);
+    workspace.write("tracked.txt", "original\n");
+    run_git(&["add", "tracked.txt"]);
+    run_git(&["-c", "user.name=ISA Test", "-c", "user.email=isa@example.invalid", "commit", "-qm", "initial"]);
+    workspace.write("tracked.txt", "staged change\n");
+    run_git(&["add", "tracked.txt"]);
+    workspace.write("tracked.txt", "unstaged change\n");
+    let staged = cli(&["diff", "--staged"], &workspace);
+    let unstaged = cli(&["diff"], &workspace);
+    assert!(staged.status.success(), "{}", stderr(&staged));
+    assert!(unstaged.status.success(), "{}", stderr(&unstaged));
+    assert!(stdout(&staged).contains("+staged change"));
+    assert!(!stdout(&staged).contains("+unstaged change"));
+    assert!(stdout(&unstaged).contains("+unstaged change"));
+}

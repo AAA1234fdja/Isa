@@ -14,6 +14,7 @@ Usage:\n\
   isa-cli files [directory]                 List workspace files\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
+  isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
@@ -78,6 +79,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 Ok(context) => println!("\nGit status:\n{context}"),
                 Err(error) => eprintln!("Git context unavailable: {error}"),
             }
+        }
+        Some("diff") => {
+            let staged = args.get(1).is_some_and(|arg| arg == "--staged");
+            let root = directory(&args, if staged { 2 } else { 1 })?;
+            print!("{}", repository::git_diff(&root, staged)?);
         }
         Some("rank") => {
             let query = argument(&args, 1, "query")?;
