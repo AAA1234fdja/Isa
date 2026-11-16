@@ -463,3 +463,31 @@ fn check_edit_rejects_symlinked_proposal_and_target() {
     assert_eq!(fs::read_to_string(workspace.path().join("actual.txt")).unwrap(), "old");
     assert!(!workspace.path().join(".isa").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn interactive_edit_reports_syntax_before_denied_approval() {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+    let workspace = Workspace::new();
+    workspace.write("source.rs", "fn main() {}\n");
+    workspace.write("proposal.txt", "File: source.rs\n<<<<<<< SEARCH\nmain()\n=======\nmain(\n>>>>>>> REPLACE");
+    let mut master = -1; let mut slave = -1;
+    let result = unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+    assert_eq!(result, 0, "could not allocate a pseudo-terminal");
+    let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+    let input = unsafe { fs::File::from_raw_fd(slave) };
+    let child = Command::new(env!("CARGO_BIN_EXE_isa-cli"))
+        .current_dir(workspace.path()).args(["apply-edit", "proposal.txt"])
+        .stdin(Stdio::from(input)).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    terminal.write_all(b"n\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let text = stdout(&output);
+    assert!(text.contains("Syntax comparison (Tree-sitter, advisory only"), "{text}");
+    assert!(text.contains("Before: no errors detected"), "{text}");
+    assert!(text.contains("After: errors detected"), "{text}");
+    assert!(stderr(&output).contains("Apply this replacement?"));
+    assert_eq!(fs::read_to_string(workspace.path().join("source.rs")).unwrap(), "fn main() {}\n");
+    assert!(!workspace.path().join(".isa").exists());
+}

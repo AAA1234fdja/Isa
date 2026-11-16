@@ -122,15 +122,46 @@ pub fn check_proposal(root: &Path, proposal: &Path) -> Result<Value> {
     preview_proposal(root, &text).map_err(Into::into)
 }
 
+fn read_target(path: &Path) -> Result<String> {
+    let mut text = String::new();
+    fs::File::open(path)?.take(LIMIT + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > LIMIT || text.contains('\0') { return Err("target must be UTF-8 text without NUL and at most 1 MiB".into()); }
+    Ok(text)
+}
+
+// Render fixed labels and numeric coordinates only; no untrusted source is
+// interpreted as terminal control sequences in the syntax summary.
+fn syntax_advisory(syntax: &Value) -> String {
+    let mut text = String::from("Syntax comparison (Tree-sitter, advisory only; not compilation or tests):\n");
+    if syntax["status"] != "checked" {
+        let why = match syntax["status"].as_str() { Some("unsupported") => "unsupported file type", Some("too_large") => "file exceeds 64 KiB", _ => "parse unavailable or incomplete" };
+        text.push_str(&format!("  Unavailable: {why}.\n"));
+        return text;
+    }
+    for (title, error_key, issue_key, truncated_key) in [("Before", "beforeHasErrors", "beforeIssues", "beforeIssuesTruncated"), ("After", "afterHasErrors", "afterIssues", "afterIssuesTruncated")] {
+        let state = match syntax[error_key].as_bool() { Some(true) => "errors detected", Some(false) => "no errors detected", None => "unknown" };
+        text.push_str(&format!("  {title}: {state}.\n"));
+        if let Some(issues) = syntax[issue_key].as_array() {
+            for issue in issues.iter().take(8) {
+                let kind = match issue["kind"].as_str() { Some("error") => "syntax error", Some("missing") => "missing syntax", _ => continue };
+                if let (Some(line), Some(column)) = (issue["line"].as_u64(), issue["byteColumn"].as_u64()) {
+                    text.push_str(&format!("    {kind}: line {line}, byte column {column}\n"));
+                }
+            }
+        }
+        if syntax[truncated_key] == true { text.push_str("    Locations may be incomplete.\n"); }
+    }
+    text.push_str("  Columns are 1-based UTF-8 byte positions; existing errors cannot be attributed to this change.\n");
+    text
+}
+
 // Read-only review: returns only the submitted block plus match metadata. It
 // never creates an undo record, writes a file, or grants permission to edit.
 pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Value, &'static str> {
     if proposal.len() > 32 * 1024 { return Err("Proposal exceeds 32 KiB."); }
     let (file, old, new) = parse_proposal(proposal).map_err(|_| "Invalid SEARCH/REPLACE format or unsafe characters.")?;
     let target = safe_path(root, Path::new(file)).map_err(|_| "Target is unavailable, protected, or not a regular file.")?;
-    let mut before = String::new();
-    std::fs::File::open(&target).map_err(|_| "Could not read the target file.")?.take(LIMIT + 1).read_to_string(&mut before).map_err(|_| "Target must be a readable UTF-8 text file.")?;
-    if before.len() as u64 > LIMIT || before.contains('\0') { return Err("Target is not supported or exceeds 1 MiB."); }
+    let before = read_target(&target).map_err(|_| "Target must be a readable UTF-8 text file without NUL and at most 1 MiB.")?;
     let (after, line) = checked_replacement(&before, old, new).map_err(|_| "The search must match exactly once and the replacement must be valid and within the size limits.")?;
     if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review."); }
     let syntax = symbols::compare_syntax(Path::new(file), &before, &after);
@@ -157,12 +188,14 @@ pub fn replace(root: &Path, relative: &Path, old: &str, new: &str) -> Result<()>
 
 fn replace_with_approval(root: &Path, relative: &Path, old: &str, new: &str, expected: Option<&str>, approve: impl FnOnce() -> Result<bool>) -> Result<()> {
     let path = safe_path(root, relative)?;
-    let before = fs::read_to_string(&path)?;
+    let before = read_target(&path)?;
     if expected.is_some_and(|snapshot| snapshot != before.as_str()) { return Err("file changed since it was sent to the model; refusing stale proposal".into()); }
     let (after, _) = checked_replacement(&before, old, new)?;
     println!("File: {}\n--- remove ---\n{}\n--- add ---\n{}", relative.display(), visible(old), visible(new));
+    print!("{}", syntax_advisory(&symbols::compare_syntax(relative, &before, &after)));
+    io::stdout().flush()?;
     if !approve()? { return Err("edit cancelled".into()); }
-    if safe_path(root, relative)? != path || fs::read_to_string(&path)? != before { return Err("file changed while awaiting approval".into()); }
+    if safe_path(root, relative)? != path || read_target(&path)? != before { return Err("file changed while awaiting approval".into()); }
     let dir = backup_dir(root)?;
     let backup = serde_json::to_vec(&json!({"version": 1, "path": relative.to_str().ok_or("path is not UTF-8")?, "before": before, "after": after}))?;
     atomic_write(&dir.join("undo.json"), &backup, false)?;
@@ -281,6 +314,30 @@ mod tests {
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         let undo: Value = serde_json::from_slice(&fs::read(root.join(".isa/undo.json")).unwrap()).unwrap();
         assert_eq!(undo["before"], "old"); assert_eq!(undo["after"], "new");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cli_syntax_advisory_is_bounded_and_never_prints_source_or_controls() {
+        let value = json!({"status":"checked", "beforeHasErrors":false, "afterHasErrors":true, "beforeIssues":[], "afterIssues":[{"kind":"error","line":2,"byteColumn":4},{"kind":"\u{001b}[31m","line":1,"byteColumn":1}], "afterIssuesTruncated":true});
+        let text = syntax_advisory(&value);
+        assert!(text.contains("Before: no errors detected"));
+        assert!(text.contains("After: errors detected"));
+        assert!(text.contains("line 2, byte column 4"));
+        assert!(text.contains("Locations may be incomplete"));
+        assert!(!text.contains('\u{001b}'));
+        assert!(syntax_advisory(&json!({"status":"unsupported"})).contains("unsupported file type"));
+        assert!(syntax_advisory(&json!({"status":"too_large"})).contains("64 KiB"));
+    }
+
+    #[test]
+    fn refuses_binary_source_in_cli_replacement() {
+        let root = std::env::temp_dir().join(format!("isa-edit-nul-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("file.txt"), b"old\0data").unwrap();
+        assert!(replace_with_approval(&root, Path::new("file.txt"), "old", "new", None, || panic!("must not ask to approve a binary target")).is_err());
+        assert_eq!(fs::read(root.join("file.txt")).unwrap(), b"old\0data");
+        assert!(!root.join(".isa").exists());
         fs::remove_dir_all(root).unwrap();
     }
 

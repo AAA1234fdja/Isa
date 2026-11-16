@@ -287,8 +287,8 @@ incorrect or unsafe change even when formatting is valid, so review it before
 approval. There is no sandbox or race-free protection against a concurrently
 modified workspace, no multi-file transaction, and no automatic test execution.
 
-The `check-edit` JSON and web review also include an advisory Tree-sitter
-syntax comparison for Rust, Python, JavaScript, TypeScript and TSX files. It
+The `check-edit` JSON, web review, and interactive CLI replacement review
+include an advisory Tree-sitter syntax comparison for Rust, Python, JavaScript, TypeScript and TSX files. It
 checks the in-memory before and proposed-after snapshots (each at most 64 KiB)
 with a best-effort 100 ms parse budget per snapshot. Unsupported, oversized or
 unfinished parses are reported as unavailable, not as passing. A parse without
@@ -298,6 +298,9 @@ a particular error is new. For each snapshot ISA reports up to eight approximate
 error or missing-syntax locations (1-based lines and UTF-8 byte columns), with
 an explicit incomplete flag if the bounded traversal is cut short. It does not
 return surrounding source text. The comparison never writes the proposed result.
+In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
+requesting final approval; detected errors do not automatically apply or block a
+change. The user remains responsible for the decision and for running tests.
 
 ### Read-only web proposal review
 
