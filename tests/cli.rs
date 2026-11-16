@@ -525,3 +525,17 @@ fn feedback_requires_separate_approvals_and_does_not_edit() {
     assert_eq!(fs::read_to_string(workspace.path().join("source.rs")).unwrap(), "fn main() {}\n");
     assert!(!workspace.path().join(".isa").exists());
 }
+
+#[test]
+fn check_edit_reports_whitespace_hint_without_changing_files() {
+    let workspace = Workspace::new();
+    workspace.write("source.txt", "private text\nlet  x = 1;\n");
+    workspace.write("proposal.txt", "File: source.txt\n<<<<<<< SEARCH\nlet x = 1;\n=======\nlet x = 2;\n>>>>>>> REPLACE");
+    for command in ["check-edit", "apply-edit"] {
+        let output = cli(&[command, "proposal.txt"], &workspace);
+        assert!(!output.status.success()); assert!(stderr(&output).contains("candidate lines"));
+        assert!(stderr(&output).contains("2-2")); assert!(!stderr(&output).contains("private text"));
+        assert_eq!(fs::read_to_string(workspace.path().join("source.txt")).unwrap(), "private text\nlet  x = 1;\n");
+        assert!(!workspace.path().join(".isa").exists());
+    }
+}

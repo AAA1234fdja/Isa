@@ -139,3 +139,16 @@ fn generation_endpoint_requires_origin_and_server_configuration() {
     assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), "old");
     assert!(!server.workspace.join(".isa").exists());
 }
+
+#[test]
+fn endpoint_reports_only_bounded_whitespace_hint_locations() {
+    let server = Server::start(true);
+    let original = "private context\n  let  x = 1;\n";
+    fs::write(server.workspace.join("source.txt"), original).unwrap();
+    let (status, body) = server.json(serde_json::json!({"proposal":proposal("source.txt", "let x = 1;", "let x = 2;")}));
+    assert_eq!(status, 422); let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(value["hints"]["candidates"][0]["startLine"], 2);
+    assert!(!body.contains("private context")); assert!(!body.contains("let  x"));
+    assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), original);
+    assert!(!server.workspace.join(".isa").exists());
+}

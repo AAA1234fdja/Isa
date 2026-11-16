@@ -155,15 +155,71 @@ fn syntax_advisory(syntax: &Value) -> String {
     text
 }
 
+#[derive(Debug)]
+pub struct PreviewError { message: &'static str, hints: Option<Value> }
+impl From<&'static str> for PreviewError { fn from(message: &'static str) -> Self { Self { message, hints: None } } }
+impl std::fmt::Display for PreviewError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)?;
+        if let Some(hints) = &self.hints {
+            if hints["status"] == "checked" {
+                write!(f, " Whitespace-normalized candidate lines (not exact matches):")?;
+                if let Some(lines) = hints["candidates"].as_array() { for item in lines { write!(f, " {}-{}", item["startLine"], item["endLine"])?; } }
+                if hints["truncated"] == true { write!(f, " (more may exist)")?; }
+            } else { write!(f, " Whitespace hints unavailable for files over 64 KiB.")?; }
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for PreviewError {}
+impl PreviewError { pub fn json(&self) -> Value { json!({"error":self.message, "hints":&self.hints}) } }
+
+// Only locations are returned, never source snippets. This is deliberately not
+// a fuzzy edit: collapsing whitespace can identify misleading partial matches.
+fn whitespace_hints(source: &str, search: &str) -> Value {
+    if source.len() > 64 * 1024 { return json!({"status":"too_large"}); }
+    fn normalize(text: &str) -> (String, Vec<usize>) {
+        let mut out = String::new(); let mut lines = Vec::new(); let mut line = 1usize; let mut whitespace = false;
+        for ch in text.chars() {
+            if ch.is_whitespace() {
+                if !whitespace { out.push(' '); lines.push(line); whitespace = true; }
+            } else {
+                out.push(ch); lines.extend(std::iter::repeat(line).take(ch.len_utf8())); whitespace = false;
+            }
+            if ch == '\n' { line += 1; }
+        }
+        (out, lines)
+    }
+    let (haystack, positions) = normalize(source);
+    let (needle, _) = normalize(search.trim());
+    if needle.is_empty() { return json!({"status":"checked","candidates":[],"truncated":false}); }
+    let mut candidates = Vec::new(); let mut start = 0; let mut truncated = false;
+    while start < haystack.len() {
+        let Some(offset) = haystack[start..].find(&needle) else { break };
+        let found = start + offset;
+        if candidates.len() == 5 { truncated = true; break; }
+        candidates.push(json!({"startLine":positions[found],"endLine":positions[found + needle.len() - 1]}));
+        start = found + haystack[found..].chars().next().unwrap().len_utf8();
+    }
+    json!({"status":"checked","candidates":candidates,"truncated":truncated})
+}
+
 // Read-only review: returns only the submitted block plus match metadata. It
 // never creates an undo record, writes a file, or grants permission to edit.
-pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Value, &'static str> {
-    if proposal.len() > 32 * 1024 { return Err("Proposal exceeds 32 KiB."); }
+pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Value, PreviewError> {
+    if proposal.len() > 32 * 1024 { return Err("Proposal exceeds 32 KiB.".into()); }
     let (file, old, new) = parse_proposal(proposal).map_err(|_| "Invalid SEARCH/REPLACE format or unsafe characters.")?;
     let target = safe_path(root, Path::new(file)).map_err(|_| "Target is unavailable, protected, or not a regular file.")?;
     let before = read_target(&target).map_err(|_| "Target must be a readable UTF-8 text file without NUL and at most 1 MiB.")?;
-    let (after, line) = checked_replacement(&before, old, new).map_err(|_| "The search must match exactly once and the replacement must be valid and within the size limits.")?;
-    if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review."); }
+    let (after, line) = match checked_replacement(&before, old, new) {
+        Ok(result) => result,
+        Err(_) if before.find(old).is_none() && old.chars().count() <= 4000 && new.chars().count() <= 4000 => {
+            if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review.".into()); }
+            return Err(PreviewError { message: "Search text has no exact match. Suggestions are approximate and cannot be applied automatically.", hints: Some(whitespace_hints(&before, old)) });
+        }
+        Err(_) => return Err("The search must match exactly once and the replacement must be valid and within the size limits.".into()),
+    };
+    if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review.".into()); }
     let syntax = symbols::compare_syntax(Path::new(file), &before, &after);
     Ok(json!({"file":file,"search":old,"replacement":new,"line":line,"beforeBytes":before.len(),"afterBytes":after.len(),"readOnly":true,"syntax":syntax}))
 }
@@ -190,7 +246,13 @@ fn replace_with_approval(root: &Path, relative: &Path, old: &str, new: &str, exp
     let path = safe_path(root, relative)?;
     let before = read_target(&path)?;
     if expected.is_some_and(|snapshot| snapshot != before.as_str()) { return Err("file changed since it was sent to the model; refusing stale proposal".into()); }
-    let (after, _) = checked_replacement(&before, old, new)?;
+    let (after, _) = match checked_replacement(&before, old, new) {
+        Ok(result) => result,
+        Err(_) if !old.is_empty() && old.chars().chain(new.chars()).all(|ch| !unsafe_for_review(ch)) && old.chars().count() <= 4000 && new.chars().count() <= 4000 && !before.contains(old) => {
+            return Err(Box::new(PreviewError { message: "Search text has no exact match. Suggestions are approximate and cannot be applied automatically.", hints: Some(whitespace_hints(&before, old)) }));
+        }
+        Err(error) => return Err(error),
+    };
     println!("File: {}\n--- remove ---\n{}\n--- add ---\n{}", relative.display(), visible(old), visible(new));
     print!("{}", syntax_advisory(&symbols::compare_syntax(relative, &before, &after)));
     io::stdout().flush()?;
@@ -391,6 +453,27 @@ mod tests {
         assert!(replace_with_approval(&root, Path::new("file.txt"), "old", "new", None, || panic!("must not ask to approve a binary target")).is_err());
         assert_eq!(fs::read(root.join("file.txt")).unwrap(), b"old\0data");
         assert!(!root.join(".isa").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn whitespace_hints_are_bounded_and_never_apply_changes() {
+        let root = std::env::temp_dir().join(format!("isa-whitespace-hints-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("a.txt"); fs::write(&file, "secret context\n  let  x = 1;\n  let\tx = 1;\n").unwrap();
+        let proposal = "File: a.txt\n<<<<<<< SEARCH\nlet x = 1;\n=======\nlet x = 2;\n>>>>>>> REPLACE";
+        let error = preview_proposal(&root, proposal).unwrap_err(); let json = error.json();
+        assert_eq!(json["hints"]["status"], "checked"); assert_eq!(json["hints"]["candidates"].as_array().unwrap().len(), 2);
+        assert_eq!(json["hints"]["candidates"][0]["startLine"], 2); assert_eq!(json["hints"]["candidates"][1]["startLine"], 3);
+        assert!(!json.to_string().contains("secret context")); assert!(!root.join(".isa").exists());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "secret context\n  let  x = 1;\n  let\tx = 1;\n");
+        assert_eq!(whitespace_hints(&"x".repeat(65537), "x")["status"], "too_large");
+        let many = whitespace_hints("é   x é   x é   x é   x é   x é   x", "é x");
+        assert_eq!(many["candidates"].as_array().unwrap().len(), 5); assert_eq!(many["truncated"], true);
+        assert!(whitespace_hints("anything", "  ")["candidates"].as_array().unwrap().is_empty());
+        fs::write(&file, "old old").unwrap();
+        let duplicate = preview_proposal(&root, "File: a.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE").unwrap_err();
+        assert!(duplicate.json()["hints"].is_null());
         fs::remove_dir_all(root).unwrap();
     }
 

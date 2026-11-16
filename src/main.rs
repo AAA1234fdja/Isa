@@ -228,7 +228,7 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
                 if let Some(root) = agent_workspace() {
                     match cli::web_preview_edit(&root, &proposal) {
                         Ok(result) => ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&result).unwrap_or_default()),
-                        Err(message) => ("422 Unprocessable Entity", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"error":message})).unwrap_or_default()),
+                        Err(error) => ("422 Unprocessable Entity", "application/json; charset=utf-8", serde_json::to_vec(&error).unwrap_or_default()),
                     }
                 } else {
                     ("503 Service Unavailable", "application/json", br#"{"error":"No server agent workspace is configured."}"#.to_vec())

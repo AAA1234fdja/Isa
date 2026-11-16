@@ -484,8 +484,8 @@ pub fn web_propose_edit(root: &std::path::Path, file: &str, task: &str, model: &
     edit::web_propose(root, std::path::Path::new(file), task, model)
 }
 
-pub fn web_preview_edit(root: &std::path::Path, proposal: &str) -> std::result::Result<serde_json::Value, &'static str> {
-    edit::preview_proposal(root, proposal)
+pub fn web_preview_edit(root: &std::path::Path, proposal: &str) -> std::result::Result<serde_json::Value, serde_json::Value> {
+    edit::preview_proposal(root, proposal).map_err(|error| error.json())
 }
 
 // Server workspace is selected by trusted configuration, never by the request.
