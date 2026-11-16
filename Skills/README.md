@@ -34,3 +34,33 @@ isa-cli skill plan "Review a Rust change and its tests" /path/to/workspace
 The JSON output recommends skills and tools but does **not** execute tools or assert that they are available. Use an outline to run `skill propose` with the desired ID and task details, then review and approve the resulting disabled draft. Planning alone never creates or modifies a skill. Automatic creation is not implemented; approval is required.
 
 With `ISA_SKILLS=auto`, a valid model plan selects up to three enabled catalog skills; unknown, disabled, and duplicate IDs are rejected. If planning is disabled or fails, automatic selection falls back to the earlier deterministic ID-word matching. An explicitly named `ISA_SKILLS` list is not overridden by planning. Planning failure is reported in server/CLI logs and does not stop the response; `skill plan` itself instead returns an error. Model-generated recommendations are fallible and not a safety check. The web UI does not yet display the plan or provide skill management.
+
+## Imported web-design-engineer
+
+`web-design-engineer/` contains the original `SKILL.md`, referenced materials,
+metadata and English documentation from [ConardLi/garden-skills](https://github.com/ConardLi/garden-skills/tree/9578a34edf3c359da23d8a632b72790834961d11/skills/web-design-engineer),
+revision `9578a34edf3c359da23d8a632b72790834961d11`, under its included MIT
+license. The original skill is 35,406 bytes and references additional files;
+ISA's current local skill loader accepts at most 8 KiB and does not load
+`SKILL.md` directories or follow references. Copying this folder alone does
+not register or enable it. The upstream Chinese README is omitted; the skill
+and its referenced materials are preserved.
+
+For the current harness, an independently written compact adaptation is
+provided as `web-design-engineer/ISA-COMPAT.txt`. From the ISA repository root,
+register it for a specific workspace and review it before enabling:
+
+```sh
+isa-cli skill create web-design-engineer Skills/web-design-engineer/ISA-COMPAT.txt /path/to/workspace
+isa-cli skill show web-design-engineer /path/to/workspace
+isa-cli skill enable web-design-engineer /path/to/workspace
+ISA_SKILLS=web-design-engineer isa-cli ask demo "Review this web interface" /path/to/workspace
+```
+
+The adaptation is not the full upstream skill; only the first 1,500 characters
+of each enabled skill are sent to the model. The local harness does not
+execute instructions, load the original references, or automatically activate
+this skill. The web server requires the skill to be registered in its own
+working directory and `ISA_SKILLS` set in the server environment. Review
+upstream instructions and use them only when compatible with the task, user
+requirements, safety boundaries, and available tools.
