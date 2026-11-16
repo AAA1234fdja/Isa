@@ -183,49 +183,50 @@ window.addEventListener('resize',applyInspectorWidth);if(window.ResizeObserver)n
 let region='US';try{const savedRegion=localStorage.getItem('isa.region');if(savedRegion==='CO'||savedRegion==='US')region=savedRegion}catch(error){}
 try { const saved=JSON.parse(localStorage.getItem(chatStorageKey)||'[]'); if(Array.isArray(saved)) chats=saved.filter(chat=>chat && typeof chat.id==='string' && typeof chat.title==='string' && Array.isArray(chat.messages)).map(chat=>({...chat,messages:chat.messages.filter(message=>message && typeof message.text==='string' && typeof message.at==='string' && !Number.isNaN(Date.parse(message.at)))})); } catch(error){notice('Could not load saved chats.');}
 function saveChats(next){try{localStorage.setItem(chatStorageKey,JSON.stringify(next));chats=next;return true}catch(error){notice('Could not save your chat in this browser.');return false}}
-// Original, vector-drawn portrait avatars. The numeric index remains stable for saved chats.
+// Abstract vector characters; stable indices preserve existing conversation selections.
 const chatAvatars=[
-  ['#d7e9df','#e7b391','#47332d','#4c7664',0,0],['#f4e2cb','#a96649','#252126','#5b7492',1,1],
-  ['#dbe4f1','#edc49e','#5f382a','#c17758',2,0],['#e6dfef','#6f4334','#201d24','#8c6683',3,2],
-  ['#e8e9c9','#c88b69','#483322','#688457',4,0],['#f4dcd6','#f0c9a9','#9e6441','#aa6c72',5,1],
-  ['#d2e8e4','#8c5945','#29252a','#43877d',6,0],['#f1dfc8','#d7a47c','#342d2c','#a4774e',7,3],
-  ['#e0e2ec','#f0cbb2','#6b4c38','#7b789b',1,0],['#e6d2cf','#684335','#292222','#a7635a',2,1],
-  ['#dfebd0','#b47853','#332a24','#63877b',3,0],['#ded9d0','#ecc09e','#424044','#5a6974',4,2],
-  ['#e9dce0','#925d46','#1e2026','#9c6d83',5,0],['#d4e4e4','#d99d79','#452b29','#507a90',6,1],
-  ['#f1e4d0','#f2cba7','#b47845','#a0735d',7,0],['#e4e0ed','#734739','#282126','#6c6795',0,3],
-  ['#d9e4d4','#c5946e','#3e3029','#738c5a',2,2],['#e9ddd1','#e8b499','#553a32','#b37a5f',3,0],
-  ['#d8e5ef','#865743','#242329','#5d7f9a',4,1],['#eee3d0','#f0c7a7','#6e5945','#98725f',6,0]
+ ['Orbit','#dcebe3','#538774','#254e40','M32 10a22 22 0 1 0 0 44a22 22 0 1 0 0-44Z',0],
+ ['Peak','#f4e7d0','#d19358','#634731','M32 8L56 51Q57 54 52 54H12Q7 54 9 50Z',1],
+ ['Cloud','#e0eaf0','#7297ab','#334f5c','M14 24C9 15 20 9 26 15C31 6 42 9 43 17C53 15 58 23 53 30C57 40 49 48 43 47C37 55 27 55 22 48C12 49 8 41 12 34C7 30 9 25 14 24Z',2],
+ ['Bloom','#f1dfdf','#c97f7b','#613e45','M32 13C39 4 46 12 45 19C56 17 57 27 50 32C57 40 51 47 44 44C42 56 33 57 29 49C21 56 14 49 18 42C7 40 8 31 16 28C10 20 17 14 24 18C24 9 29 8 32 13Z',3],
+ ['Ripple','#dbece9','#4f9693','#275658','M13 14C22 8 28 18 35 14S49 9 53 15V49C45 55 39 45 32 50S18 55 11 49V18Z',4],
+ ['Gem','#e9e2f2','#967ab3','#48365b','M32 7L53 20L50 44L32 57L14 44L11 20Z',5],
+ ['Comet','#f7e6d5','#d69769','#62462f','M11 17Q31 4 49 17Q58 24 52 35Q49 47 31 52Q11 52 9 37Q7 26 11 17Z',6],
+ ['Leaf','#e4eddb','#8da76e','#405836','M12 38C11 19 30 8 52 10C54 31 44 52 25 53C17 52 12 46 12 38Z',7],
+ ['Moon','#e1e7f2','#8296bb','#3a4b6b','M36 9C22 12 18 24 21 35C24 45 34 50 45 47C41 53 35 56 29 55C16 54 9 43 11 30C13 18 23 9 36 9Z',8],
+ ['Sun','#f6ebd1','#d7ad59','#624c28','M32 6L37 14L45 10L47 19L56 21L52 29L58 36L50 41L51 50L42 50L37 58L30 53L22 58L18 50L9 49L12 40L6 34L13 28L10 20L19 19L22 11L28 15Z',9],
+ ['Pebble','#e4e4df','#8d9a89','#3d5148','M12 26C14 15 25 9 37 12C48 14 54 24 52 36C51 48 43 54 30 53C16 52 9 43 12 26Z',0],
+ ['Petal','#f0e2ec','#ae80a1','#583e55','M32 7C35 16 42 18 51 16C48 25 50 31 57 36C48 38 44 44 44 53C36 49 28 50 21 55C20 46 15 41 7 38C14 32 16 25 13 17C22 19 29 15 32 7Z',1],
+ ['Sprout','#dce9df','#74a783','#355d47','M18 20Q18 11 27 11H37Q46 11 46 20V45Q46 53 38 53H26Q18 53 18 45Z',2],
+ ['Wave','#e0ebf2','#6395ad','#305062','M10 22C14 12 22 10 29 17C35 8 45 9 49 18C56 20 57 29 52 34C56 45 49 53 40 50C35 56 25 54 22 49C12 50 8 43 12 35C7 30 7 25 10 22Z',3],
+ ['Arc','#ede5d8','#bc9870','#5b4939','M10 50V31C10 17 19 9 32 9S54 17 54 31V50Q54 54 50 54H14Q10 54 10 50Z',4],
+ ['Star','#e6e0ee','#9c85b0','#493c5e','M32 7L38 21L53 15L47 29L58 38L43 39L40 55L30 45L18 55L19 40L6 34L19 27L16 13L27 20Z',5],
+ ['Drop','#d8e9ed','#6fa8b2','#31535d','M32 7C27 16 13 26 13 38C13 49 21 56 32 56S51 49 51 38C51 26 37 16 32 7Z',6],
+ ['Tile','#f0e4dc','#c18f7e','#67463f','M12 17Q12 10 19 10H45Q52 10 52 17V47Q52 54 45 54H19Q12 54 12 47Z',7],
+ ['Kite','#e3ebd9','#9aad77','#48583a','M32 7L53 31L32 57L11 31Z',8],
+ ['Spiral','#eae0db','#b58178','#59423e','M12 35C12 20 23 10 35 11C47 12 54 21 53 33C52 47 42 54 30 53C19 52 12 45 12 35Z',9]
 ];
 function avatarArt(index){
-  const [background,skin,hair,shirt,style,detail]=chatAvatars[index],ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 64 64');svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');
+  const [name,background,fill,ink,path,detail]=chatAvatars[index],ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox','0 0 64 64');svg.setAttribute('aria-hidden','true');svg.setAttribute('focusable','false');
   function shape(tag,attributes){const element=document.createElementNS(ns,tag);for(const [key,value] of Object.entries(attributes))element.setAttribute(key,String(value));svg.append(element);return element}
-  shape('rect',{width:64,height:64,rx:16,fill:background});
-  if([2,3,5,6].includes(style))shape('path',{d:'M13 31C13 14 20 7 32 7s19 7 19 24v18H13Z',fill:hair});
-  shape('path',{d:'M6 64c1-12 10-19 26-19s25 7 26 19Z',fill:shirt});
-  shape('path',{d:'M25 40h14v9c-2 4-5 6-7 6s-5-2-7-6Z',fill:skin});
-  shape('ellipse',{cx:32,cy:28,rx:16,ry:19,fill:skin});
-  const cuts=[
-    'M16 25c0-12 6-18 16-18s16 6 16 18c-4-2-6-6-7-10-5 6-13 8-25 10Z',
-    'M16 24C14 10 24 5 34 7c9 1 15 8 14 17-4-5-10-8-16-7-5 1-10 4-16 7Z',
-    'M16 24C15 12 22 6 32 6s17 7 16 18c-5-1-10-4-13-9-4 5-11 8-19 9Z',
-    'M16 23C16 12 22 7 32 7s16 5 16 16c-5-3-10-5-16-5s-11 2-16 5Z',
-    'M15 23c1-11 8-17 17-17s16 6 17 17c-4-1-7-4-9-8-6 5-14 8-25 8Z',
-    'M16 26C14 13 21 6 32 6s18 7 16 20c-4-3-7-8-8-12-5 6-13 9-24 12Z',
-    'M16 24C13 12 20 6 30 6c12 0 20 7 18 18-5-2-9-6-11-10-4 6-11 9-21 10Z',
-    'M16 24c0-11 5-17 16-17s16 6 16 17c-4-3-8-5-12-6-6 4-12 6-20 6Z'
-  ];shape('path',{d:cuts[style],fill:hair});
-  if(style===4){for(const x of [20,26,32,38,44])shape('circle',{cx:x,cy:13,r:5,fill:hair})}
-  if(style===7)shape('path',{d:'M18 19c4-5 8-7 14-7 7 0 11 2 14 7',fill:'none',stroke:hair,'stroke-width':4,'stroke-linecap':'round'});
-  shape('circle',{cx:26,cy:29,r:1.5,fill:'#302722'});shape('circle',{cx:38,cy:29,r:1.5,fill:'#302722'});
-  shape('path',{d:detail===3?'M27 37c3 4 7 4 10 0':'M27.5 37c2.8 2.5 6.2 2.5 9 0',fill:'none',stroke:'#714b3f','stroke-width':1.5,'stroke-linecap':'round'});
-  if(detail===1){shape('rect',{x:20,y:25,width:11,height:8,rx:3,fill:'none',stroke:'#3f4848','stroke-width':1.6});shape('rect',{x:33,y:25,width:11,height:8,rx:3,fill:'none',stroke:'#3f4848','stroke-width':1.6});shape('path',{d:'M31 28h2',stroke:'#3f4848','stroke-width':1.6})}
-  if(detail===2){shape('circle',{cx:17,cy:34,r:2,fill:'#d2aa5a'});shape('circle',{cx:47,cy:34,r:2,fill:'#d2aa5a'})}
-  if(detail===3)shape('path',{d:'M20 36c2 10 8 13 12 13s10-3 12-13c-2 5-5 7-12 7s-10-2-12-7Z',fill:hair,opacity:'.9'});
+  shape('rect',{width:64,height:64,rx:15,fill:background});
+  if(detail===0)shape('path',{d:'M7 40C14 51 47 50 57 25',fill:'none',stroke:ink,'stroke-width':1.5,opacity:'.45'});
+  if(detail===2){shape('circle',{cx:13,cy:16,r:2,fill:ink,opacity:'.45'});shape('circle',{cx:51,cy:47,r:2,fill:ink,opacity:'.45'})}
+  if(detail===6)shape('path',{d:'M8 18l7-3M10 23l5-1',stroke:ink,'stroke-width':1.5,'stroke-linecap':'round',opacity:'.5'});
+  if(detail===7)shape('path',{d:'M48 13l6-5M48 13l8 1',stroke:ink,'stroke-width':1.6,'stroke-linecap':'round',opacity:'.5'});
+  shape('path',{d:path,fill});
+  if(detail===4)shape('path',{d:'M17 22c9-5 18 5 30 0',fill:'none',stroke:background,'stroke-width':2,opacity:'.6','stroke-linecap':'round'});
+  if(detail===5)shape('path',{d:'M32 10v9M20 23l4 3M44 23l-4 3',fill:'none',stroke:background,'stroke-width':2,opacity:'.7','stroke-linecap':'round'});
+  if(detail===9)shape('circle',{cx:32,cy:32,r:16,fill:background,opacity:'.2'});
+  const eyes=index===8?[25,34]:[26,38];
+  if(detail===3){for(const x of eyes)shape('path',{d:`M${x-2} 30q2-2 4 0`,fill:'none',stroke:ink,'stroke-width':2,'stroke-linecap':'round'})}else for(const x of eyes)shape('circle',{cx:x,cy:30,r:1.8,fill:ink});
+  const mouth=index===8?'M25 37q3 2 6 0':detail===1?'M28 37q4 5 8 0':'M28 37q4 3 8 0';shape('path',{d:mouth,fill:'none',stroke:ink,'stroke-width':1.7,'stroke-linecap':'round'});
+  if(detail===8)shape('circle',{cx:43,cy:23,r:2.2,fill:background,opacity:'.7'});
   return svg
 }
 function avatarIndex(chat){if(Number.isInteger(chat.avatar)&&chat.avatar>=0&&chat.avatar<chatAvatars.length)return chat.avatar;let hash=0;for(const char of chat.id)hash=(Math.imul(hash,31)+char.charCodeAt(0))>>>0;return hash%chatAvatars.length}
 function makeChatAvatar(chat,onSaved){const button=node('button','chat-avatar-button');button.append(avatarArt(avatarIndex(chat)));button.type='button';button.setAttribute('aria-label','Edit details for '+chat.title);button.title='Edit conversation details';button.onclick=()=>openChatDetails(chat.id,onSaved);return button}
-function openChatDetails(id,onSaved){const chat=chats.find(item=>item.id===id);if(!chat)return;const dialog=document.querySelector('#chatDetailsDialog'),form=document.querySelector('#chatDetailsForm'),name=document.querySelector('#chatDetailName'),description=document.querySelector('#chatDetailDescription'),choices=document.querySelector('#chatAvatarChoices');let selected=avatarIndex(chat);name.value=chat.title;description.value=typeof chat.description==='string'?chat.description:'';choices.replaceChildren();for(let index=0;index<chatAvatars.length;index++){const button=node('button','chat-avatar-choice');button.append(avatarArt(index));button.type='button';button.setAttribute('aria-label','Avatar '+(index+1));button.setAttribute('aria-pressed',String(index===selected));button.onclick=()=>{selected=index;choices.querySelectorAll('button').forEach((option,i)=>option.setAttribute('aria-pressed',String(i===selected)))};choices.append(button)}const times=chat.messages.map(message=>Date.parse(message.at)).filter(Number.isFinite),first=times.length?times.reduce((a,b)=>Math.min(a,b)):null,last=times.length?times.reduce((a,b)=>Math.max(a,b)):null,created=typeof chat.createdAt==='string'?Date.parse(chat.createdAt):NaN,validCreated=Number.isFinite(created),format=value=>value===null||!Number.isFinite(value)?'Not available':new Intl.DateTimeFormat(region==='CO'?'es-CO':'en-US',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));document.querySelector('#chatCreatedLabel').textContent=validCreated?'Created':'First recorded message';document.querySelector('#chatCreatedValue').textContent=format(validCreated?created:first);document.querySelector('#chatLastActiveValue').textContent=format(last);document.querySelector('#chatMessageCount').textContent=String(chat.messages.length);form.onsubmit=event=>{event.preventDefault();const title=name.value.trim();if(!title){name.focus();return}const current=chats.find(item=>item.id===id);if(!current){dialog.close();notice('Conversation is no longer available.');return}const updated={...current,title,description:description.value.trim(),avatar:selected};if(!saveChats(chats.map(item=>item.id===id?updated:item)))return;dialog.close();renderRecent();if(activeChatId===id&&!thread.hidden)document.querySelector('#title').textContent=title;if(typeof onSaved==='function')onSaved();notice('Conversation details saved.')};dialog.showModal();name.focus()}
+function openChatDetails(id,onSaved){const chat=chats.find(item=>item.id===id);if(!chat)return;const dialog=document.querySelector('#chatDetailsDialog'),form=document.querySelector('#chatDetailsForm'),name=document.querySelector('#chatDetailName'),description=document.querySelector('#chatDetailDescription'),choices=document.querySelector('#chatAvatarChoices');let selected=avatarIndex(chat);name.value=chat.title;description.value=typeof chat.description==='string'?chat.description:'';choices.replaceChildren();for(let index=0;index<chatAvatars.length;index++){const button=node('button','chat-avatar-choice');button.append(avatarArt(index));button.type='button';button.setAttribute('aria-label','Avatar '+(index+1));button.title=chatAvatars[index][0];button.setAttribute('aria-pressed',String(index===selected));button.onclick=()=>{selected=index;choices.querySelectorAll('button').forEach((option,i)=>option.setAttribute('aria-pressed',String(i===selected)))};choices.append(button)}const times=chat.messages.map(message=>Date.parse(message.at)).filter(Number.isFinite),first=times.length?times.reduce((a,b)=>Math.min(a,b)):null,last=times.length?times.reduce((a,b)=>Math.max(a,b)):null,created=typeof chat.createdAt==='string'?Date.parse(chat.createdAt):NaN,validCreated=Number.isFinite(created),format=value=>value===null||!Number.isFinite(value)?'Not available':new Intl.DateTimeFormat(region==='CO'?'es-CO':'en-US',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));document.querySelector('#chatCreatedLabel').textContent=validCreated?'Created':'First recorded message';document.querySelector('#chatCreatedValue').textContent=format(validCreated?created:first);document.querySelector('#chatLastActiveValue').textContent=format(last);document.querySelector('#chatMessageCount').textContent=String(chat.messages.length);form.onsubmit=event=>{event.preventDefault();const title=name.value.trim();if(!title){name.focus();return}const current=chats.find(item=>item.id===id);if(!current){dialog.close();notice('Conversation is no longer available.');return}const updated={...current,title,description:description.value.trim(),avatar:selected};if(!saveChats(chats.map(item=>item.id===id?updated:item)))return;dialog.close();renderRecent();if(activeChatId===id&&!thread.hidden)document.querySelector('#title').textContent=title;if(typeof onSaved==='function')onSaved();notice('Conversation details saved.')};dialog.showModal();name.focus()}
 document.querySelector('#closeChatDetails').onclick=()=>document.querySelector('#chatDetailsDialog').close();document.querySelector('#cancelChatDetails').onclick=()=>document.querySelector('#chatDetailsDialog').close();
 
 function setInspector(mode){if(inspectorMode===mode)mode=null;inspectorMode=mode;changesSequence++;inspector.hidden=!mode;taskOverviewToggle.classList.toggle('active',mode==='overview');changesToggle.classList.toggle('active',mode==='changes');taskOverviewToggle.setAttribute('aria-expanded',String(mode==='overview'));changesToggle.setAttribute('aria-expanded',String(mode==='changes'));refreshChanges.hidden=mode!=='changes';if(!mode)return;applyInspectorWidth();inspectorTitle.textContent=mode==='overview'?'Task overview':'Changes';if(mode==='overview')renderTaskOverview();else loadChanges()}
