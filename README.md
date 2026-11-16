@@ -25,3 +25,27 @@ While the preview is open, ISA checks `index.html` and the logo for changes ever
 The Extensions screen searches the real [Open VSX Registry](https://open-vsx.org/) through the Rust server's `GET /api/extensions?q=...` endpoint. Run `cargo run` with network access to `open-vsx.org` to use it; a static preview server cannot provide this endpoint. The server also needs access to crates.io when building its dependencies. The current sandbox may block the registry. Search results link to the registry; ISA does not yet install, load, execute, or manage extensions. Those capabilities require a compatible extension host and a security model.
 
 Agents, folders, knowledge, and automations are interface placeholders, not connected services. Chats store user messages locally but do not yet connect to an AI provider. The activity chart counts distinct conversations with messages on each local calendar day. Search currently covers only preview projects stored in the browser.
+
+## ISA CLI: initial backend
+
+The Rust CLI is an initial foundation, not a complete coding agent. Run `cargo run --bin isa-cli -- help` for commands. It can list files, perform bounded literal text searches, show a limited Git status, store named local chat sessions, and send chat messages to an Ollama server on `127.0.0.1:11434`. Set `ISA_MODEL` to choose an installed model. For example:
+
+```sh
+cargo run --bin isa-cli -- files .
+cargo run --bin isa-cli -- search "TODO" .
+cargo run --bin isa-cli -- context .
+cargo run --bin isa-cli -- chat my-session .
+cargo run --bin isa-cli -- history my-session .
+```
+
+Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Its file filtering is not a complete secret scanner or a security sandbox. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
+
+Semantic indexing, AST-aware context, tool calling, editing, approvals, sandboxing, MCP, Git undo, streaming, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
+
+### Design references
+
+- [Cursor CLI headless and approvals](https://cursor.com/docs/cli/headless)
+- [Qoder CLI permissions](https://docs.qoder.com/cli/permissions)
+- [Qoder MCP reference](https://docs.qoder.com/cli/mcp-reference)
+- [Hermes CLI and session management](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/cli.md)
+- [MCP transports](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
