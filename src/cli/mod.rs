@@ -30,7 +30,7 @@ Usage:\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
   isa-cli processes [directory]             Supervise approved local processes\n\
-  isa-cli mcp <list|call> ...              Use an approved MCP stdio server\n\
+  isa-cli mcp <list|call|propose> ...              Use an approved MCP stdio server\n\
   isa-cli skill <command> ...               Manage reusable skills\n\
   isa-cli harness-eval <suite.json> <mode>   Evaluate response harness checks\n\
   isa-cli semantic-index <model> [directory] Build local embedding index\n\
@@ -125,7 +125,11 @@ pub fn run(args: Vec<String>) -> Result<()> {
             match action.as_str() {
                 "list" if args.get(2).map(String::as_str) == Some("--") && args.len() >= 4 => mcp::interactive(&root, "list", None, None, &args[3..])?,
                 "call" if args.get(4).map(String::as_str) == Some("--") && args.len() >= 6 => mcp::interactive(&root, "call", Some(&args[2]), Some(&args[3]), &args[5..])?,
-                _ => return Err("usage: isa-cli mcp list -- <program> [args...] | isa-cli mcp call <tool> <json-object> -- <program> [args...]".into()),
+                "propose" if args.get(3).map(String::as_str) == Some("--") && args.len() >= 5 => {
+                    let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".into());
+                    mcp::propose(&root, &args[2], &args[4..], &model)?;
+                },
+                _ => return Err("usage: isa-cli mcp list -- <program> [args...] | isa-cli mcp call <tool> <json-object> -- <program> [args...] | isa-cli mcp propose <task> -- <program> [args...]".into()),
             }
         }
         Some("skill") => skill_command(&args[1..])?,

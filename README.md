@@ -310,13 +310,19 @@ over stdio on Unix. From an interactive terminal, use:
 ```text
 isa-cli mcp list -- <server-program> [server-arguments...]
 isa-cli mcp call <tool-name> '<json-object>' -- <server-program> [server-arguments...]
+isa-cli mcp propose <task> -- <server-program> [server-arguments...]
 ```
 
 ISA asks before starting the server, performs initialization and bounded
 `tools/list` discovery, displays the server-provided tool metadata and exact
 arguments, and asks separately before `tools/call`. It does not enforce the
-server-provided JSON Schema. The model and browser cannot invoke MCP; no tool
-results are automatically sent to a model. Only stdio and this protocol version
+server-provided JSON Schema. With `propose`, after separate consent ISA sends the task and complete discovered
+metadata (up to 16 KiB combined) to the configured Ollama model. The model can
+suggest at most one call or decline; ISA checks that the name uniquely matches
+and the arguments are an object, then shows the proposal for separate approval.
+The tool result is displayed but is not sent back to the model; there is no
+multi-step model loop. Server metadata and model proposals may contain prompt
+injection or unsafe arguments: review them. The browser cannot invoke MCP. Only stdio and this protocol version
 are supported; HTTP, OAuth, resources, prompts, sampling, server requests and
 persistent sessions are not implemented. Discovery is limited to three pages and
 100 tools; calls are refused when discovery is incomplete or the name is not unique. Messages and operation time are bounded. A call can have completed
