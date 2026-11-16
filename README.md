@@ -311,6 +311,7 @@ over stdio on Unix. From an interactive terminal, use:
 isa-cli mcp list -- <server-program> [server-arguments...]
 isa-cli mcp call <tool-name> '<json-object>' -- <server-program> [server-arguments...]
 isa-cli mcp propose <task> -- <server-program> [server-arguments...]
+isa-cli mcp loop <task> -- <server-program> [server-arguments...]
 ```
 
 ISA asks before starting the server, performs initialization and bounded
@@ -334,6 +335,20 @@ persistent sessions are not implemented. Server pings receive an empty response
 within the same bounded operation; unsupported server requests fail closed. Discovery is limited to three pages and
 100 tools; calls are refused when discovery is incomplete or the name is not unique. Messages and operation time are bounded. A call can have completed
 before a timeout or interruption, so do not blindly retry it.
+
+For a bounded multi-tool workflow, `mcp loop` lets the model propose up to
+three sequential calls to the same stdio server. ISA displays the full context
+and asks before **every** model request, then displays the selected tool and
+arguments and asks before **every** call. The next context includes the full
+results of all prior calls; inspect it for secrets and untrusted instructions
+before approving. The context is capped at 32 KiB without truncation. After
+three calls, the model may give a final answer but cannot call another tool.
+Invalid responses, denial, oversized context, protocol failures, and tool errors
+stop the loop. Prior calls and their effects are never rolled back. A failed or
+timed-out call may already have run: do not blindly retry. Tool descriptions
+and results can change or be malicious; discovery and approval are not a
+sandbox or a guarantee of server behavior. This is CLI-only and uses Ollama,
+not the web agent or a general tool-calling API.
 
 **MCP servers are executable programs, not sandboxes.** Even initialization or
 listing may change files, expose environment variables, access credentials or
