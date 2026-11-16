@@ -320,8 +320,14 @@ server-provided JSON Schema. With `propose`, after separate consent ISA sends th
 metadata (up to 16 KiB combined) to the configured Ollama model. The model can
 suggest at most one call or decline; ISA checks that the name uniquely matches
 and the arguments are an object, then shows the proposal for separate approval.
-The tool result is displayed but is not sent back to the model; there is no
-multi-step model loop. Server metadata and model proposals may contain prompt
+After a successful call, the full result is displayed. You can separately approve
+sending the original task, tool name, arguments and result to Ollama for a final
+answer; this is skipped if their serialized size exceeds 32 KiB. Declining does
+not undo the call. ISA performs no further tool calls in this final-answer step,
+and a failed model request does not undo the tool's effects. Tool-reported errors
+are shown and do not trigger a summary. Results can contain secrets or prompt
+injection, and the model's answer may be inaccurate; inspect them before sharing
+or relying on them. Server metadata and model proposals may contain prompt
 injection or unsafe arguments: review them. The browser cannot invoke MCP. Only stdio and this protocol version
 are supported; HTTP, OAuth, resources, prompts, sampling, server requests and
 persistent sessions are not implemented. Discovery is limited to three pages and
