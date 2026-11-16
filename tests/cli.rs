@@ -350,3 +350,35 @@ fn resume_rejects_invalid_session_ids_and_variants() {
     assert!(!cli(&["resume", "../outside", "AC"], &workspace).status.success());
     assert!(!cli(&["resume", "example", "invalid"], &workspace).status.success());
 }
+
+#[test]
+fn decoy_server_returns_explicit_non_ai_response() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::time::Duration;
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
+    }
+    let workspace = Workspace::new();
+    let process = Command::new(env!("CARGO_BIN_EXE_isa-decoy"))
+        .current_dir(workspace.path()).stdout(Stdio::null()).stderr(Stdio::null())
+        .spawn().expect("start decoy");
+    let mut guard = ChildGuard(process);
+    let mut stream = loop {
+        if let Some(status) = guard.0.try_wait().unwrap() { panic!("decoy exited early: {status}"); }
+        match TcpStream::connect("127.0.0.1:4180") {
+            Ok(stream) => break stream,
+            Err(_) => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let body = r#"{"message":"Hello"}"#;
+    write!(stream, "POST /v1/chat HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}", body.len(), body).unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.contains("200 OK"), "{response}");
+    let value: serde_json::Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
+    assert_eq!(value["provider"], "decoy");
+    assert!(value["content"].as_str().unwrap().contains("not an AI response"));
+}

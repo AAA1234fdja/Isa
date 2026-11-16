@@ -1,5 +1,7 @@
 use std::env;
-use std::io::{self, Read, Write};
+mod http;
+
+use std::io;
 use std::net::{TcpListener, TcpStream};
 
 // Embedded assets are a fallback when running outside the project directory.
@@ -40,18 +42,29 @@ fn search_extensions(query: &str) -> Result<Vec<u8>, String> {
 }
 
 fn handle_request(mut stream: TcpStream) -> io::Result<()> {
-    stream.set_read_timeout(Some(std::time::Duration::from_secs(5)))?;
-    let mut buffer = [0; 4096];
-    let read = stream.read(&mut buffer)?;
-    let request = String::from_utf8_lossy(&buffer[..read]);
-    let mut parts = request.lines().next().unwrap_or("").split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let target = parts.next().unwrap_or("");
+    let request = match http::read_request(&mut stream) {
+        Ok(request) => request,
+        Err(_) => return http::respond(&mut stream, "400 Bad Request", "application/json", br#"{"error":"Invalid request"}"#, false),
+    };
+    let method = request.method.as_str();
+    let target = request.target.as_str();
     let (path, query_string) = target.split_once('?').unwrap_or((target, ""));
 
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
+        ("POST", "/api/decoy") => {
+            if !request.is_same_origin_json() {
+                ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
+            } else {
+                let client = reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(std::time::Duration::from_secs(5)).build();
+                let result = client.and_then(|client| client.post("http://127.0.0.1:4180/v1/chat").header("Content-Type", "application/json").body(request.body.clone()).send()?.error_for_status()?.bytes());
+                match result {
+                    Ok(body) if body.len() <= 128 * 1024 => ("200 OK", "application/json; charset=utf-8", body.to_vec()),
+                    _ => ("502 Bad Gateway", "application/json", b"{\"error\":\"Decoy provider unavailable\"}".to_vec()),
+                }
+            }
+        },
         ("GET", "/api/extensions") => {
             let raw = query_string.split('&').find_map(|part| part.strip_prefix("q=")).unwrap_or("");
             match decode_query(raw) {
@@ -88,11 +101,7 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("GET" | "HEAD", _) => ("404 Not Found", "text/plain; charset=utf-8", b"Not found".to_vec()),
         _ => ("405 Method Not Allowed", "text/plain; charset=utf-8", b"Method not allowed".to_vec()),
     };
-    write!(stream, "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nX-Content-Type-Options: nosniff\r\nCache-Control: no-store\r\n\r\n", body.len())?;
-    if method != "HEAD" {
-        stream.write_all(&body)?;
-    }
-    Ok(())
+    http::respond(&mut stream, status, content_type, &body, method == "HEAD")
 }
 
 fn main() -> io::Result<()> {

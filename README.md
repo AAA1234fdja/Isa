@@ -99,3 +99,14 @@ Provider brand icons are sourced from [SVGL](https://github.com/pheralb/svgl) an
 The snapshot stores file contents unencrypted under `.isa/work` until ended. The scan respects ignore rules and excludes common sensitive paths, but is not a complete secret filter. Binary files and text files over 512 KiB or 10,000 lines are skipped and reported; the total captured text is limited to 16 MiB. This tracker is currently CLI-only: it is not yet connected to the browser, GitHub, or PR creation. Concurrent changes during a scan and hostile workspace modification are not isolated.
 
 For summary instances and non-chat utility commands, see [Context instances](docs/context-instances.md). Ollama summaries require two additional requests after each completed CLI response; the browser does not yet access CLI summaries.
+
+## Local decoy provider
+
+Run the decoy alongside the Rust web server:
+
+```sh
+cargo run --bin isa-decoy
+cargo run --bin isa
+```
+
+The decoy listens only on `127.0.0.1:4180`. When no real model provider is configured, the browser sends message text to the same-origin `/api/decoy` endpoint on the Rust web server, which forwards it to the decoy. The response is explicitly labeled as a non-AI acknowledgement. Attachments are saved locally with the chat but are not transmitted to the decoy. If the decoy or web server is unavailable, the user message is kept and an error is displayed. A configured provider must not silently fall back to the decoy. The static Python preview does not implement this API.

@@ -17,3 +17,12 @@ jobs:
         run: cargo test --all-targets
       - name: Check release build
         run: cargo build --release --all-targets
+      - name: Upload Linux binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: isa-linux-binaries
+          path: |
+            target/release/isa
+            target/release/isa-decoy
+          if-no-files-found: error
+          retention-days: 1
