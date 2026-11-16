@@ -163,3 +163,15 @@ With the **Rust server** and `ISA_WEB_MODEL` configured, the chat sends UTF-8 te
 Document and image contents are treated as untrusted input, but prompt injection remains possible. The contents are sent to local Ollama during response probes and composition; the harness's planner may also see part of the message text. Files are held in memory only: sent attachment chips can be reopened while they remain in the session's bounded in-memory cache, but not after reload or eviction. Chat history stores attachment names and temporary references, not file contents. Subsequent turns do not resend earlier files automatically. Review sensitive documents before attaching them. Do not expose the unauthenticated local server to untrusted networks.
 
 PDF previews and text extraction use locally bundled [PDF.js](https://github.com/mozilla/pdf.js) (Apache-2.0). DOCX text extraction uses [Mammoth.js](https://github.com/mwilliamson/mammoth.js) (BSD-2-Clause, including the licenses listed in its bundle). Copies of their licenses are in `assets/vendor`.
+
+### Task overview and Git changes panels
+
+The upper-right Task overview panel shows the active browser conversation's latest request, actual provider status, and latest response or error. Agent plans and tool activity are not connected. The Changes panel displays read-only staged and unstaged Git diffs, split by file, when the **Rust** web server is explicitly started with a workspace:
+
+```sh
+ISA_WEB_WORKSPACE=/absolute/path/to/repository cargo run --bin isa
+```
+
+Use Refresh to reload changes. It shows tracked Git diffs only; untracked and ignored files are not included. Binary patches may not show file contents. Each diff is capped at 2 MiB, and display is capped at 200 files per section and 2,000 lines per file. Changes are not attributed specifically to the agent, and revert is not implemented. The browser's folder picker does not select the server workspace. The Node development preview has no Git endpoint and displays an unavailable message.
+
+The configured directory may contain sensitive changes. The server does not authenticate users; same-origin checks are not a substitute for authentication or protection against DNS rebinding. Enable `ISA_WEB_WORKSPACE` only on a trusted local interface, not a public preview or untrusted network. Without it, no workspace diff is exposed.

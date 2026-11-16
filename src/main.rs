@@ -118,6 +118,21 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
+        ("POST", "/api/changes") => {
+            if !request.is_same_origin_json() {
+                ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
+            } else if let Ok(path) = env::var("ISA_WEB_WORKSPACE") {
+                match std::path::Path::new(&path).canonicalize() {
+                    Ok(root) if root.is_dir() => match cli::web_changes(&root) {
+                        Ok(changes) => ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&changes).unwrap_or_default()),
+                        Err(error) => { eprintln!("Git diff failed: {error}"); ("502 Bad Gateway", "application/json", b"{\"error\":\"Could not read Git changes. Check that the configured workspace is a Git repository and each diff is below 2 MiB.\"}".to_vec()) },
+                    },
+                    _ => ("503 Service Unavailable", "application/json", b"{\"error\":\"The configured workspace is unavailable.\"}".to_vec()),
+                }
+            } else {
+                ("503 Service Unavailable", "application/json", b"{\"error\":\"No server workspace is configured. The browser folder selector is not connected to Git.\"}".to_vec())
+            }
+        },
         ("POST", "/api/chat") if env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty()) => {
             if !request.is_same_origin_json() {
                 ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())

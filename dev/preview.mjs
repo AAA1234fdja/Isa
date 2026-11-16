@@ -12,6 +12,11 @@ function respond(response, status, type, body, head = false) {
 }
 http.createServer(async (request, response) => {
   const url = new URL(request.url, 'http://localhost');
+  if (request.method === 'POST' && url.pathname === '/api/changes') {
+    const host=request.headers.host||'', origin=request.headers.origin||'', type=(request.headers['content-type']||'').split(';')[0].trim();
+    if (!host || !['http://'+host,'https://'+host].includes(origin) || type !== 'application/json') return respond(response,403,'application/json','{"error":"Same-origin JSON request required"}');
+    return respond(response,503,'application/json','{"error":"Git changes are not available in the development preview. Configure a workspace in the Rust server."}');
+  }
   if (request.method === 'POST' && (url.pathname === '/api/decoy' || url.pathname === '/api/chat')) {
     const host = request.headers.host || '';
     const origin = request.headers.origin || '';

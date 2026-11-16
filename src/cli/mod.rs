@@ -411,3 +411,35 @@ pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, Str
         harness::respond(root, model, &messages, |_| Ok(()))
     }
 }
+
+// Diff access is read-only and only exposed by the server after explicit configuration.
+pub fn web_changes(root: &std::path::Path) -> Result<serde_json::Value> {
+    let staged = repository::git_diff(root, true)?;
+    let unstaged = repository::git_diff(root, false)?;
+    Ok(serde_json::json!({"staged": staged, "unstaged": unstaged}))
+}
+
+#[cfg(test)]
+mod web_changes_tests {
+    use super::*;
+    use std::process::Command;
+    #[test]
+    fn reports_real_staged_and_unstaged_changes() {
+        let dir = std::env::temp_dir().join(format!("isa-web-diff-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let result = Command::new("git").current_dir(&dir).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").args(args).output().unwrap();
+            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        };
+        git(&["init", "-q"]); git(&["config", "user.name", "ISA Test"]); git(&["config", "user.email", "test@example.invalid"]);
+        std::fs::write(dir.join("file.txt"), "original\n").unwrap(); git(&["add", "file.txt"]); git(&["commit", "-qm", "initial"]);
+        std::fs::write(dir.join("file.txt"), "staged\n").unwrap(); git(&["add", "file.txt"]);
+        std::fs::write(dir.join("file.txt"), "unstaged\n").unwrap();
+        std::fs::write(dir.join("untracked.txt"), "not included\n").unwrap();
+        let data = web_changes(&dir).unwrap();
+        assert!(data["staged"].as_str().unwrap().contains("+staged"));
+        assert!(data["unstaged"].as_str().unwrap().contains("+unstaged"));
+        assert!(!data.to_string().contains("untracked.txt"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
