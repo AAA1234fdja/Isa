@@ -82,8 +82,21 @@ messages. Editing provider settings preserves the prompt. Deletion makes saved
 chat references unavailable; pool members are shown as unavailable until removed.
 
 The provider list scrolls after ten rows. Agents Pool lets you create, rename,
-delete and edit local teams and save directed “manages” connections between
-their providers. Duplicate, self-referential and cyclic connections are rejected.
-Removing a team member also removes their connections. Pools and workflows are
-configuration only: they do not invoke models, delegate, or run agents. They are
-stored in this browser and are not included in chat exports.
+delete and edit local teams. Edit workflow opens a scrollable diagram with
+movable agent and subagent nodes. Select a node to edit its properties. Each
+team provider has an agent node; subagent nodes are separate instances backed
+by a team provider. Agent system prompts are shared with direct provider chats
+and saved when the workflow is saved. Subagent instructions, minimum and maximum
+tokens, and reasoning effort are stored per node. Blank values mean inherit the
+provider/model defaults; ISA does not currently set token or effort defaults,
+and supported parameters vary by provider.
+
+Use the arrow tools and select two nodes: a one-way arrow records management or
+delegation from the first to the second, while a two-way arrow records parallel
+work and intended synthesis. The connection list removes arrows. Duplicate,
+self-referential and cyclic management connections are rejected. Previously
+saved management connections are migrated into the diagram when it opens.
+Removing a team member removes its nodes and connections. Cancel discards changes.
+Pools and workflows are configuration only: they do not invoke models, apply
+subagent settings, delegate, compare responses, synthesize results, or run agents.
+They are stored in this browser and are not included in chat exports.
