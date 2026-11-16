@@ -118,7 +118,7 @@ pub fn save(root: &Path, id: &str, messages: &[Message]) -> Result<()> {
     result
 }
 
-pub fn ollama_reply(model: &str, messages: &[Message]) -> Result<String> {
+fn select_context(messages: &[Message]) -> Vec<Value> {
     let mut selected = Vec::new();
     let mut size = 0usize;
     for message in messages.iter().rev() {
@@ -128,17 +128,81 @@ pub fn ollama_reply(model: &str, messages: &[Message]) -> Result<String> {
         selected.push(json!({"role": message.role, "content": message.content}));
     }
     selected.reverse();
+    selected
+}
+
+const MAX_EVENT_BYTES: usize = 1024 * 1024;
+const MAX_REPLY_BYTES: usize = 4 * 1024 * 1024;
+
+fn read_event<R: std::io::BufRead>(reader: &mut R) -> Result<Option<Vec<u8>>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            return if line.is_empty() { Ok(None) } else { Ok(Some(line)) };
+        }
+        let size = buffer.iter().position(|byte| *byte == b'\n').map(|i| i + 1).unwrap_or(buffer.len());
+        if line.len() + size > MAX_EVENT_BYTES { return Err("model stream event exceeds size limit".into()); }
+        line.extend_from_slice(&buffer[..size]);
+        let complete = line.last() == Some(&b'\n');
+        reader.consume(size);
+        if complete { return Ok(Some(line)); }
+    }
+}
+
+fn consume_stream<R: std::io::BufRead, F: FnMut(&str) -> Result<()>>(mut reader: R, mut on_chunk: F) -> Result<String> {
+    let mut output = String::new();
+    let mut completed = false;
+    while let Some(line) = read_event(&mut reader)? {
+        if line.iter().all(u8::is_ascii_whitespace) { continue; }
+        let event: Value = serde_json::from_slice(&line)?;
+        if let Some(error) = event.get("error").and_then(Value::as_str) {
+            return Err(format!("model error: {error}").into());
+        }
+        if let Some(content) = event.pointer("/message/content").and_then(Value::as_str) {
+            if output.len() + content.len() > MAX_REPLY_BYTES { return Err("model response exceeds size limit".into()); }
+            on_chunk(content)?;
+            output.push_str(content);
+        }
+        if event.get("done").and_then(Value::as_bool) == Some(true) {
+            completed = true;
+            break;
+        }
+    }
+    if !completed { return Err("model stream ended before completion".into()); }
+    if output.is_empty() { return Err("model returned an empty response".into()); }
+    Ok(output)
+}
+
+pub fn ollama_stream<F: FnMut(&str) -> Result<()>>(model: &str, messages: &[Message], on_chunk: F) -> Result<String> {
+    let selected = select_context(messages);
+    if selected.is_empty() { return Err("no messages fit in the model context".into()); }
     let client = reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(120)).build()?;
-    let response: Value = client.post("http://127.0.0.1:11434/api/chat")
-        .json(&json!({"model": model, "messages": selected, "stream": false}))
-        .send()?.error_for_status()?.json()?;
-    let content = response.pointer("/message/content").and_then(Value::as_str).ok_or("model returned no message")?;
-    Ok(content.to_string())
+    let response = client.post("http://127.0.0.1:11434/api/chat")
+        .json(&json!({"model": model, "messages": selected, "stream": true}))
+        .send()?.error_for_status()?;
+    consume_stream(std::io::BufReader::new(response), on_chunk)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stream_combines_chunks_and_requires_done() {
+        let events = b"{\"message\":{\"content\":\"Hello \"},\"done\":false}\n{\"message\":{\"content\":\"world\"},\"done\":true}\n";
+        let mut seen = String::new();
+        let response = consume_stream(&events[..], |chunk| { seen.push_str(chunk); Ok(()) }).unwrap();
+        assert_eq!(response, "Hello world");
+        assert_eq!(seen, response);
+        assert!(consume_stream(&events[..events.iter().position(|b| *b == b'\n').unwrap() + 1], |_| Ok(())).is_err());
+    }
+
+    #[test]
+    fn stream_reports_provider_errors() {
+        let event = b"{\"error\":\"model missing\"}\n";
+        assert!(consume_stream(&event[..], |_| Ok(())).is_err());
+    }
 
     #[test]
     fn session_id_rejects_traversal() {

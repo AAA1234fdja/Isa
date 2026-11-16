@@ -4,7 +4,7 @@ mod repository;
 mod session;
 
 use std::error::Error;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 
 pub type Result<T> = std::result::Result<T, Box<dyn Error>>;
@@ -19,7 +19,8 @@ Usage:\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli sessions [directory]              List saved sessions\n\
   isa-cli history <session-id> [directory]  Show a saved session\n\
-  isa-cli chat <session-id> [directory]     Chat with a local Ollama model\n\n\
+  isa-cli chat <session-id> [directory]     Chat with a local Ollama model\n\
+  isa-cli ask <session-id> <prompt> [directory]  Run one local model request\n\n\
 Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
 Sessions are stored locally under .isa/sessions.\n\
 The model cannot execute commands or make file edits.";
@@ -114,6 +115,14 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
             chat(&root, &id, &model)?;
         }
+        Some("ask") => {
+            let id = argument(&args, 1, "session ID")?;
+            let prompt = argument(&args, 2, "prompt")?;
+            let root = directory(&args, 3)?;
+            let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+            let mut messages = session::load(&root, &id)?;
+            run_turn(&root, &id, &model, &mut messages, &prompt)?;
+        }
         Some(other) => return Err(format!("unknown command: {other}\n\n{HELP}").into()),
     }
     Ok(())
@@ -136,20 +145,37 @@ fn chat(root: &std::path::Path, id: &str, model: &str) -> Result<()> {
         if input.is_empty() {
             continue;
         }
-        if input.len() > 64 * 1024 {
-            eprintln!("Message exceeds the 64 KiB limit.");
-            continue;
+        if let Err(error) = run_turn(root, id, model, &mut messages, input) {
+            eprintln!("\nModel request failed: {error}");
         }
-        messages.push(session::Message::new("user", input));
-        session::save(root, id, &messages)?;
-        match session::ollama_reply(model, &messages) {
-            Ok(reply) => {
-                println!("\nISA: {reply}\n");
-                messages.push(session::Message::new("assistant", &reply));
-                session::save(root, id, &messages)?;
-            }
-            Err(error) => eprintln!("Model unavailable: {error}"),
-        }
+    }
+    Ok(())
+}
+
+fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<session::Message>, input: &str) -> Result<()> {
+    if input.trim().is_empty() { return Err("message must not be empty".into()); }
+    if input.len() > 64 * 1024 { return Err("message exceeds the 64 KiB limit".into()); }
+    messages.push(session::Message::new("user", input));
+    if let Err(error) = session::save(root, id, messages) {
+        messages.pop();
+        return Err(error);
+    }
+    let terminal = io::stdout().is_terminal();
+    let reply = session::ollama_stream(model, messages, |chunk| {
+        let safe;
+        let displayed = if terminal {
+            safe = chunk.chars().map(|c| if c == '\n' || c == '\t' || !c.is_control() { c } else { '�' }).collect::<String>();
+            safe.as_str()
+        } else { chunk };
+        print!("{displayed}");
+        io::stdout().flush()?;
+        Ok(())
+    })?;
+    println!();
+    messages.push(session::Message::new("assistant", &reply));
+    if let Err(error) = session::save(root, id, messages) {
+        messages.pop();
+        return Err(error);
     }
     Ok(())
 }

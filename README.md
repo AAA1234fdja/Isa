@@ -38,12 +38,13 @@ cargo run --bin isa-cli -- rank "authentication handler" .
 cargo run --bin isa-cli -- replace path/to/file "old text" "new text" .
 cargo run --bin isa-cli -- undo .
 cargo run --bin isa-cli -- chat my-session .
+cargo run --bin isa-cli -- ask my-session "Explain Rust ownership" .
 cargo run --bin isa-cli -- history my-session .
 ```
 
 Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
 
-Semantic indexing, AST-aware context, model tool calling, agent-driven editing, sandboxing, MCP, Git undo, streaming, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
+Semantic indexing, AST-aware context, model tool calling, agent-driven editing, sandboxing, MCP, Git undo, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
 
 ### Design references
 
@@ -52,3 +53,5 @@ Semantic indexing, AST-aware context, model tool calling, agent-driven editing, 
 - [Qoder MCP reference](https://docs.qoder.com/cli/mcp-reference)
 - [Hermes CLI and session management](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/cli.md)
 - [MCP transports](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports)
+
+The Ollama chat streams responses to the terminal. `ask` runs one request without an interactive prompt and exits nonzero on failure; it does not execute agent tools. A user message is saved before the request, while an assistant message is saved only after the stream completes. Partial responses are not saved.
