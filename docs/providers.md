@@ -127,11 +127,22 @@ subagent) also coordinates delegation for that group. Only active nodes can
 delegate along their outgoing arrows. Agent output is supplied to
 subsequent models as untrusted reference data. The comparison is a model response,
 not a guaranteed objective evaluation. Delegated tasks and parallel responses are
-shown in expandable Agent pool details and stored locally with the chat. Subagent instructions and configured
-`min_tokens`, `max_tokens`, and `reasoning_effort` are sent to the provider;
-unsupported parameters may cause errors. Blank values are omitted. ISA does not
-independently control the reasoning-token budget: providers may count reasoning
-against `max_tokens`. If the provider returns reasoning but no final content,
+shown in expandable Agent pool details and stored locally with the chat. Subagent
+instructions and configured `min_tokens` and `reasoning_effort` are sent to the
+provider. In **Settings → Providers**, choose whether the subagent's maximum
+output setting uses `max_tokens` (the default) or `max_completion_tokens`. A
+separate optional **Maximum reasoning tokens** value can be set on each subagent;
+it is sent as `max_reasoning_tokens` only if the provider's explicit support
+switch is enabled. A configured value with the switch off fails the pool rather
+than being ignored. Existing providers and workflows default to the previous
+behavior; blank values are omitted. These options apply to pool subagents, not
+direct chat or pool agents.
+
+Select these parameters only when the provider and model support them. ISA does
+not implement reasoning-token accounting or guarantee separate budgets: either
+output field may include reasoning tokens, and the provider may reject or ignore
+the parameters or combinations. No fallback retries change the requested fields.
+If the provider returns reasoning but no final content,
 ISA displays a specific error without storing the reasoning, and includes any
 reported usage. There is no automatic retry or guarantee that a higher limit
 will work.
@@ -174,7 +185,7 @@ Browser routing regression tests (mocked providers, no real API calls): start
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
 `node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
-and `node tests/browser-context-errors.cjs`. The dependency-free runtime regression can be run with `node tests/pool-runtime.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and `node tests/browser-context-errors.cjs`. The dependency-free runtime regression can be run with `node tests/pool-runtime.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
 
 

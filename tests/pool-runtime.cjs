@@ -2,9 +2,9 @@
 const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
 const html=fs.readFileSync('index.html','utf8');
 function extract(start,end){const a=html.indexOf(start),b=html.indexOf(end,a);assert(a>=0&&b>a);return html.slice(a,b)}
-const script=[extract('function validProviderEndpoint(', 'try{const list=JSON.parse(localStorage.getItem(customProviderKey)'),extract('function providerSecret(',"const pendingChats="),extract('function parseProviderUsage(', 'function tokenStats('),extract('async function withRequestTimeout(', 'async function requestServer('),extract('async function runAgentPool(', 'function updateRoutingLabel(')].join('\n');
+const script=[extract('function validProviderEndpoint(', 'try{const list=JSON.parse(localStorage.getItem(customProviderKey)'),extract('function providerSecret(',"const pendingChats="),extract('function parseProviderUsage(', 'function tokenStats('),extract('async function withRequestTimeout(', 'async function requestServer('),extract('async function runAgentPool(', 'function updateRoutingLabel('),extract('function workflowGraph(', 'function openWorkflow(')].join('\n');
 const calls=[];let response=(host,body)=>({choices:[{message:{content:'answer'}}]});
-const env={URL,DOMException,AbortController,setTimeout,clearTimeout,JSON,Map,Set,Array,Number,String,Promise,sessionStorage:{getItem(){return ''}},customSecretPrefix:'key:',customProviders:[],agentPools:[],workflowGraph:pool=>pool.graph,fetch:async(url,options)=>{let body=JSON.parse(options.body);calls.push({url,body});let data=response(url,body);return {ok:data.status===undefined,status:data.status||200,json:async()=>data}},console};vm.createContext(env);vm.runInContext(script,env);
+const env={URL,DOMException,AbortController,setTimeout,clearTimeout,JSON,Map,Set,Array,Number,String,Promise,sessionStorage:{getItem(){return ''}},customSecretPrefix:'key:',customProviders:[],agentPools:[],fetch:async(url,options)=>{let body=JSON.parse(options.body);calls.push({url,body});let data=response(url,body);return {ok:data.status===undefined,status:data.status||200,json:async()=>data}},console};vm.createContext(env);vm.runInContext(script,env);
 (async()=>{
  env.customProviders=[{id:'custom-a',name:'A',model:'m',url:'https://a.example.com/chat',systemPrompt:''},{id:'custom-b',name:'B',model:'m',url:'https://b.example.com/chat',systemPrompt:''}];
  let result,usage=[];response=()=>({choices:[{message:{content:'',reasoning_content:'private thoughts'},finish_reason:'length'}],usage:{prompt_tokens:10,completion_tokens:8,total_tokens:18}});
@@ -17,5 +17,14 @@ const env={URL,DOMException,AbortController,setTimeout,clearTimeout,JSON,Map,Set
  env.customProviders[0].strictPoolJson=true;calls.length=0;result=await run();assert(!result.error);assert.equal(calls[0].body.response_format.type,'json_schema');assert.equal(calls[0].body.response_format.json_schema.strict,true);assert.equal(calls.filter(c=>c.body.response_format).length,1);
  calls.length=0;response=(url,body)=>({choices:[{message:{content:body.messages.at(-1).content.includes('Delegate the user request')?JSON.stringify({own_subagents:[],tasks:[{id:'b',task:'inspect',subagents:[]}]}):'x'.repeat(8001)}}]});result=await run();assert(result.error);assert.match(result.text,/No content was silently truncated/);assert.equal(calls.length,2);
  calls.length=0;response=()=>({status:400});result=await run();assert(result.error);assert.equal(calls.length,1,'unsupported schema must not silently retry');
- console.log('Pool compact communication, schema opt-in, empty-answer diagnostics and usage passed');
+ // Explicit per-provider opt-in and per-subagent budgets survive graph normalization.
+ env.customProviders[0].strictPoolJson=false;env.customProviders[1].outputTokenField='max_completion_tokens';env.customProviders[1].reasoningBudgetSupported=true;
+ env.agentPools[0].graph.nodes[1]={id:'b',providerId:'custom-b',type:'subagent',maxTokens:800,minTokens:20,reasoningTokens:300,effort:'low'};
+ response=(url,body)=>({choices:[{message:{content:body.messages.at(-1).content.includes('Delegate the user request')?JSON.stringify({own_subagents:[],tasks:[{id:'b',task:'inspect',subagents:['b']}]}):url.includes('b.example')?'short findings':'final answer'}}]});
+ calls.length=0;result=await run();assert(!result.error);sub=calls.find(c=>c.url.includes('b.example'));assert.equal(sub.body.max_completion_tokens,800);assert.equal(sub.body.min_tokens,20);assert.equal(sub.body.max_reasoning_tokens,300);assert.equal(sub.body.reasoning_effort,'low');assert(!('max_tokens' in sub.body));assert(!('max_reasoning_tokens' in calls[0].body));
+ env.customProviders[1].reasoningBudgetSupported=false;calls.length=0;result=await run();assert(result.error);assert.match(result.text,/not configured to support max_reasoning_tokens/);assert(!calls.some(c=>c.url.includes('b.example')));
+ env.customProviders[1].reasoningBudgetSupported=true;env.agentPools[0].graph.nodes[1].reasoningTokens=0;calls.length=0;result=await run();assert(result.error);assert.match(result.text,/invalid token settings/);assert(!calls.some(c=>c.url.includes('b.example')));
+ env.agentPools[0].graph.nodes[1].reasoningTokens=null;calls.length=0;result=await run();assert(!result.error);sub=calls.find(c=>c.url.includes('b.example'));assert(!('max_reasoning_tokens' in sub.body));
+
+ console.log('Pool compact communication, schema opt-in, reasoning budgets, empty-answer diagnostics and usage passed');
 })().catch(e=>{console.error(e);process.exit(1)});
