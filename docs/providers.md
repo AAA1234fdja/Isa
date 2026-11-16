@@ -85,10 +85,15 @@ The provider list scrolls after ten rows. Agents Pool lets you create, rename,
 delete and edit local teams. Edit workflow opens a scrollable diagram with
 movable agent and subagent nodes. Choose a team provider and a shape in the
 palette, then left-click the map to place it. Select a node to edit its
-properties; drag its grip to move it. Use the mouse wheel or zoom buttons to
+properties; drag the node or its grip to move it. Select it and use the
+remove button to delete the node and its connections (the provider remains in
+the team). Use the mouse wheel or zoom buttons to
 zoom, and right-drag the map to pan. Each team provider starts with an agent
-node; additional agent and subagent nodes are separate instances backed by a
-team provider. Agent nodes backed by the same provider share its system prompt. Agent system prompts are shared with direct provider chats
+node. A workflow can have at most one agent node per provider, while multiple
+subagent nodes may use the same provider. A removed agent can be placed again.
+Older duplicate agent nodes are merged on opening; connections are redirected
+where possible. Invalid, redundant or cyclic connections are dropped from the
+working copy and reported before saving. Cancel leaves the original map intact. Agent system prompts are shared with direct provider chats
 and saved when the workflow is saved. Subagent instructions, minimum and maximum
 tokens, and reasoning effort are stored per node. Blank values mean inherit the
 provider/model defaults; ISA does not currently set token or effort defaults,
