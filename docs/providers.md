@@ -160,9 +160,23 @@ intermediate answer exceeding 8,000 characters fails the pool instead of being
 truncated; a pool response reported by the provider as stopped by its output
 limit is also rejected. The final user-facing answer is not subject to the
 intermediate character limit. Conciseness and token or latency reductions are not guaranteed. Pool
-requests have a 120-second browser timeout; other custom-provider requests retain
-45 seconds. A failed node fails the pool; cancellation aborts browser requests
-but may not stop remote computation.
+requests have a 120-second browser timeout per attempt; other custom-provider
+requests retain 45 seconds. The pool retries transient network errors, timeouts,
+HTTP 408, 429 and 5xx at most twice per model request, with exponential delay
+and jitter. `Retry-After` is honored when visible to the browser; if it exceeds
+five seconds ISA does not retry. A CORS-hidden header cannot be honored.
+Authentication, configuration, invalid output and other non-transient failures
+are not retried. Retries may duplicate remote work and charges even after a
+browser timeout or cancellation; usage for failed attempts may be unknown.
+
+After transient retries are exhausted, an unavailable delegated branch is
+reported to its parent as missing, and a parallel group can continue with its
+remaining successful members. The final answer is explicitly marked partial and
+pool details record the failure; missing work is not presented as completed.
+If all agents in a group fail, its coordinator fails, a non-transient failure
+occurs, or final synthesis fails, the pool may still fail. Cancellation aborts
+browser requests and retry waits but may not stop remote computation. Pool
+responses are not streamed; they appear after each provider response completes.
 
 Pool agents do not invoke tools, plugins, or the Rust harness, and the runner does
 not provide sandboxing or autonomous file editing. Optionally, a chat can set a
@@ -176,8 +190,8 @@ may be missed. The lookup is bounded and may be incomplete; failure stops the po
 It requires `ISA_WEB_AGENT_WORKSPACE`, not the browser folder picker, and is not
 used by goal or context-compression helpers. Results may expose sensitive project
 information. The same-origin endpoint is a development feature, not a security
-boundary against untrusted users of the server. A pool may make up to 16 model
-requests per message, can incur charges, and sends the chat history, message,
+boundary against untrusted users of the server. A pool may make up to 16 logical model
+requests per message, with up to three attempts each, can incur charges, and sends the chat history, message,
 attachments, and intermediate responses to its participating providers. Auto
 may also send the same data to multiple providers during fallback. ISA asks for
 confirmation before each such send and lists the destinations. Auto retries
@@ -196,7 +210,7 @@ Browser routing regression tests (mocked providers, no real API calls): start
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
 `node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
-and `node tests/browser-context-errors.cjs`. The dependency-free runtime regression can be run with `node tests/pool-runtime.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and `node tests/browser-context-errors.cjs`. The dependency-free runtime regressions can be run with `node tests/pool-runtime.cjs` and `node tests/pool-resilience.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
 
 

@@ -1,0 +1,26 @@
+// Exercise the actual browser pool runner with deterministic local fake providers.
+const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('fs');
+const html=fs.readFileSync('index.html','utf8');
+function extract(start,end){const a=html.indexOf(start),b=html.indexOf(end,a);assert(a>=0&&b>a);return html.slice(a,b)}
+const script=[extract('function validProviderEndpoint(', 'try{const list=JSON.parse(localStorage.getItem(customProviderKey)'),extract('function providerSecret(',"const pendingChats="),extract('function parseProviderUsage(', 'function tokenStats('),extract('async function withRequestTimeout(', 'async function requestServer('),extract('async function runAgentPool(', 'function updateRoutingLabel('),extract('function workflowGraph(', 'function openWorkflow(')].join('\n');
+let handler;const calls=[];
+const env={URL,DOMException,AbortController,setTimeout,clearTimeout,JSON,Map,Set,Array,Number,String,Promise,Date,Math,sessionStorage:{getItem(){return ''}},customSecretPrefix:'key:',customProviders:[{id:'custom-a',name:'A',model:'m',url:'https://a.example.com/chat',systemPrompt:''},{id:'custom-b',name:'B',model:'m',url:'https://b.example.com/chat',systemPrompt:''}],agentPools:[],fetch:async(url,options)=>{const body=JSON.parse(options.body);calls.push({url,body});const data=await handler(url,body,options);return {ok:data.status===undefined,status:data.status||200,headers:{get:()=>data.retryAfter||null},json:async()=>data}},console};vm.createContext(env);vm.runInContext(script,env);
+const ok=text=>({choices:[{message:{content:text}}]});
+const single=()=>{env.agentPools=[{id:'p',name:'P',graph:{nodes:[{id:'a',providerId:'custom-a',type:'agent'}],edges:[]}}];calls.length=0};
+const branch=()=>{env.agentPools=[{id:'p',name:'P',graph:{nodes:[{id:'a',providerId:'custom-a',type:'agent'},{id:'b',providerId:'custom-b',type:'agent'}],edges:[{from:'a',to:'b',type:'manage'}]}}];calls.length=0};
+const run=(signal=new AbortController().signal,onUsage)=>env.runAgentPool('p',[{role:'user',text:'solve'}],[],signal,onUsage);
+const plan=JSON.stringify({own_subagents:[],tasks:[{id:'b',task:'inspect',subagents:[]}]});
+(async()=>{
+ const timeout=await env.withRequestTimeout(new AbortController().signal,signal=>new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(new DOMException('timeout','AbortError')))),10);assert(timeout.error&&timeout.transient);
+ single();let attempts=0,usage=[];handler=()=>++attempts<3?{status:429}:ok('recovered');let result=await run(undefined,u=>usage.push(u));assert(!result.error);assert.equal(attempts,3);assert.equal(usage.length,3);assert.equal(result.poolTrace.filter(x=>x.startsWith('Retry ')).length,2);
+ single();handler=()=>({status:401});result=await run();assert(result.error);assert.equal(calls.length,1);
+ single();handler=()=>({status:429,retryAfter:'60'});result=await run();assert(result.error);assert.equal(calls.length,1);assert(result.poolTrace.some(x=>x.includes('Retry-After exceeds')));
+ branch();handler=(url,body)=>url.includes('b.example')?{status:503}:ok(body.messages.at(-1).content.includes('Delegate the user request')?plan:'manager answer');result=await run();assert(!result.error);assert.match(result.text,/Partial: one or more branches unavailable/);assert.match(result.text,/work is missing/);assert.equal(calls.filter(c=>c.url.includes('b.example')).length,3);assert(calls.at(-1).body.messages.at(-1).content.includes('UNAVAILABLE'));assert(result.poolTrace.some(x=>x.includes('Unavailable branch')));
+ branch();handler=(url,body)=>url.includes('b.example')?{status:400}:ok(body.messages.at(-1).content.includes('Delegate the user request')?plan:'manager answer');result=await run();assert(result.error);assert.equal(calls.filter(c=>c.url.includes('b.example')).length,1);assert(!calls.some(c=>c.body.messages.at(-1).content.includes('UNAVAILABLE')));
+ env.agentPools=[{id:'p',name:'P',graph:{nodes:[{id:'a',providerId:'custom-a',type:'agent'},{id:'b',providerId:'custom-b',type:'agent'}],edges:[{from:'a',to:'b',type:'parallel'}]}}];calls.length=0;
+ handler=url=>url.includes('b.example')?{status:503}:ok('surviving answer');result=await run();assert(!result.error);assert.match(result.text,/Partial/);assert.match(result.text,/surviving answer/);assert(result.poolTrace.some(x=>x.includes('Unavailable agent')));
+ calls.length=0;handler=()=>({status:503});result=await run();assert(result.error);assert.equal(calls.length,6);
+ single();let network=0;handler=()=>{if(++network===1)throw new TypeError('network down');return ok('recovered network')};result=await run();assert(!result.error);assert.equal(network,2);
+ single();const controller=new AbortController();handler=()=>{setTimeout(()=>controller.abort(),20);return {status:429}};await assert.rejects(run(controller.signal),e=>e.name==='AbortError');assert.equal(calls.length,1);
+ console.log('Pool bounded retries, Retry-After, partial branch failures and cancellation passed');
+})().catch(e=>{console.error(e);process.exit(1)});
