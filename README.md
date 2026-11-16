@@ -86,6 +86,6 @@ Records live in `.isa/contracts` and `.isa/goals`, are local to the workspace, a
 
 ## Chat composer
 
-The browser chat can save up to four UTF-8 text attachments (64 KiB each) with a message in browser local storage. They are not sent to a model or uploaded; do not attach sensitive files on a shared browser. Folder selection, when supported, grants browser read access for the current page session only; no files are read or sent to an agent yet. Voice input uses the browser's Speech Recognition API when available; the browser or its provider may process audio.
+The browser chat can save up to four UTF-8 text attachments (64 KiB each) with a message in browser local storage. They are not sent to a model or uploaded; do not attach sensitive files on a shared browser. Folder selection grants browser read access for the current page session only. You can browse a folder and explicitly attach individual UTF-8 text files to a chat. Folder access is not restored after reload, and no files are sent to an agent. Browsers without directory handles can use the folder file picker; only the first 2,000 entries are shown. Voice input uses the browser's Speech Recognition API when available; the browser or its provider may process audio.
 
 Several `./command/.` shortcuts open sections of the browser interface. CLI-backed commands, model selection, approval controls, and AI responses are not connected to the browser chat yet. Unsupported controls remain disabled.
