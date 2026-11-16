@@ -77,6 +77,21 @@ fn files_excludes_secret_and_generated_directories() {
     assert!(!list.contains(".git"));
 }
 
+
+#[test]
+fn files_respects_gitignore_without_a_git_repository() {
+    let workspace = Workspace::new();
+    workspace.write(".gitignore", "ignored/\n*.secret\n");
+    workspace.write("ignored/file.txt", "ignored");
+    workspace.write("private.secret", "ignored");
+    workspace.write("keep.txt", "included");
+    let output = cli(&["files"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("keep.txt"));
+    assert!(!stdout(&output).contains("ignored/file.txt"));
+    assert!(!stdout(&output).contains("private.secret"));
+}
+
 #[test]
 fn search_reports_matching_lines_without_searching_secrets() {
     let workspace = Workspace::new();

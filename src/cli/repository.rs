@@ -8,38 +8,31 @@ const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_RESULTS: usize = 1_000;
 
 fn excluded(name: &str) -> bool {
-    matches!(name, ".git" | ".isa" | "node_modules" | "target" | "dist" | "build" | ".venv" | "vendor" | ".env" | ".git-credentials" | ".netrc")
+    matches!(name, ".git" | ".isa" | "node_modules" | "target" | "dist" | "build" | ".venv" | "vendor" | ".env" | ".git-credentials" | ".netrc" | ".ssh" | ".aws" | "id_rsa" | "id_ed25519")
         || name.starts_with(".env.")
 }
 
 pub fn files(root: &Path) -> Result<Vec<PathBuf>> {
-    let mut pending = vec![root.to_path_buf()];
     let mut result = Vec::new();
-    while let Some(dir) = pending.pop() {
-        let entries = match fs::read_dir(&dir) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
-            Err(error) => return Err(error.into()),
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .follow_links(false)
+        .require_git(false)
+        .filter_entry(|entry| entry.depth() == 0 || !excluded(&entry.file_name().to_string_lossy()))
+        .build();
+    for entry in walker {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                eprintln!("Skipped inaccessible path: {error}");
+                continue;
+            }
         };
-        for entry in entries {
-            let entry = entry?;
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if excluded(&name) {
-                continue;
-            }
-            let kind = entry.file_type()?;
-            if kind.is_symlink() {
-                continue;
-            }
-            if kind.is_dir() {
-                pending.push(entry.path());
-            } else if kind.is_file() {
-                result.push(entry.path().strip_prefix(root)?.to_path_buf());
-                if result.len() >= MAX_FILES {
-                    result.sort();
-                    return Ok(result);
-                }
+        if entry.file_type().is_some_and(|kind| kind.is_file() && !kind.is_symlink()) {
+            result.push(entry.path().strip_prefix(root)?.to_path_buf());
+            if result.len() >= MAX_FILES {
+                eprintln!("File listing reached the {MAX_FILES}-file limit.");
+                break;
             }
         }
     }
