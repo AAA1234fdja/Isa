@@ -34,7 +34,7 @@ Usage:\n\
   isa-cli semantic-search <query> [directory] Search the embedding index\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
   isa-cli callers <name> [directory]       Find syntactic call sites (no name resolution)\n\
-  isa-cli symbols <name> [directory]       Find syntax declarations (Rust, Python, JavaScript)\n\
+  isa-cli symbols <name> [directory]       Find syntax declarations (Rust, Python, JS, TS)\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
   isa-cli apply-edit <proposal-file> [directory]  Review one SEARCH/REPLACE block\n\

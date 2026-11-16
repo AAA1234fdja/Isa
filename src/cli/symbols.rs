@@ -16,12 +16,24 @@ fn language(path: &Path) -> Option<tree_sitter::Language> {
         "rs" => Some(tree_sitter_rust::LANGUAGE.into()),
         "py" => Some(tree_sitter_python::LANGUAGE.into()),
         "js" | "mjs" | "cjs" | "jsx" => Some(tree_sitter_javascript::LANGUAGE.into()),
+        "ts" | "mts" | "cts" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         _ => None,
     }
 }
 
 fn declaration(kind: &str) -> bool {
-    matches!(kind, "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item" | "mod_item" | "const_item" | "static_item" | "function_definition" | "class_definition" | "function_declaration" | "generator_function_declaration" | "class_declaration" | "method_definition")
+    matches!(kind, "function_item" | "struct_item" | "enum_item" | "trait_item" | "type_item" | "mod_item" | "const_item" | "static_item" | "function_definition" | "class_definition" | "function_declaration" | "generator_function_declaration" | "class_declaration" | "method_definition" | "interface_declaration" | "type_alias_declaration" | "enum_declaration")
+}
+
+// Only simple bindings of functions are named; destructuring and wrappers are not resolved.
+fn assigned_function_name<'a>(node: tree_sitter::Node<'a>, content: &'a [u8]) -> Option<(&'a str, &'static str)> {
+    if node.kind() != "variable_declarator" { return None; }
+    let name = node.child_by_field_name("name")?;
+    if name.kind() != "identifier" { return None; }
+    let value = node.child_by_field_name("value")?;
+    let kind = match value.kind() { "arrow_function" => "arrow_function", "function_expression" => "function_expression", "generator_function" => "generator_function", _ => return None };
+    Some((name.utf8_text(content).ok()?, kind))
 }
 
 #[derive(Clone, Copy)]
@@ -49,6 +61,13 @@ fn enclosing_function<'a>(mut node: tree_sitter::Node<'a>, content: &'a [u8]) ->
         if matches!(parent.kind(), "function_item" | "function_definition" | "function_declaration" | "generator_function_declaration" | "method_definition") {
             return parent.child_by_field_name("name").and_then(|n| n.utf8_text(content).ok()).filter(|s| s.len() <= 160 && !s.chars().any(char::is_control));
         }
+        if matches!(parent.kind(), "arrow_function" | "function_expression" | "generator_function") {
+            let directly_named = parent.child_by_field_name("name").and_then(|n| n.utf8_text(content).ok());
+            let assigned = parent.parent().and_then(|binding| assigned_function_name(binding, content).map(|(name, _)| name));
+            return directly_named.or(assigned).filter(|s| s.len() <= 160 && !s.chars().any(char::is_control));
+        }
+        // Do not attribute calls in anonymous lambdas/closures to an outer function.
+        if matches!(parent.kind(), "lambda" | "closure_expression") { return None; }
         node = parent;
     }
     None
@@ -93,6 +112,13 @@ fn scan(root: &Path, query: &str, mode: Lookup) -> Result<Value> {
                     if let Some(name) = node.child_by_field_name("name").and_then(|n| n.utf8_text(&content).ok()) {
                         if name.len() <= 160 && !name.chars().any(char::is_control) && name.to_lowercase().contains(&needle) {
                             results.push(json!({"path":path.to_string_lossy(),"name":name,"kind":node.kind(),"line":node.start_position().row + 1}));
+                        }
+                    }
+                }
+                Lookup::Declarations if node.kind() == "variable_declarator" => {
+                    if let Some((name, kind)) = assigned_function_name(node, &content) {
+                        if name.len() <= 160 && !name.chars().any(char::is_control) && name.to_lowercase().contains(&needle) {
+                            results.push(json!({"path":path.to_string_lossy(),"name":name,"kind":kind,"line":node.start_position().row + 1}));
                         }
                     }
                 }
@@ -150,6 +176,30 @@ mod tests {
         assert!(calls.iter().all(|item| item["callee"] == "parse" && item["caller"] == "work"));
         assert_eq!(calls.iter().filter(|item| item["path"] == "b.py").count(), 2);
         assert!(callers(&root, "PARSE").unwrap()["calls"].as_array().unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn indexes_typescript_tsx_and_named_function_expressions() {
+        let root = std::env::temp_dir().join(format!("isa-ts-symbols-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("parser.ts"), "interface ParseConfig { strict: boolean }\ntype ParseResult = string;\nconst parseFile = (x: string): string => normalize(x);\nconst wrap = function (x: string) { return normalize(x); };\nconst value = normalize('x');\n").unwrap();
+        fs::write(root.join("view.tsx"), "const View = () => <div>{normalize('x')}</div>;\n").unwrap();
+        fs::write(root.join("other.js"), "function outer() { items.map(() => normalize('x')); }\nconst run = () => normalize('x');\n").unwrap();
+        let result = lookup(&root, "parse").unwrap();
+        let items = result["symbols"].as_array().unwrap();
+        assert_eq!(result["parse_error_files"], 0);
+        assert!(items.iter().any(|s| s["name"] == "ParseConfig" && s["kind"] == "interface_declaration"));
+        assert!(items.iter().any(|s| s["name"] == "ParseResult" && s["kind"] == "type_alias_declaration"));
+        assert!(items.iter().any(|s| s["name"] == "parseFile" && s["kind"] == "arrow_function"));
+        let calls = callers(&root, "normalize").unwrap();
+        let calls = calls["calls"].as_array().unwrap();
+        assert!(calls.iter().any(|c| c["caller"] == "parseFile"));
+        assert!(calls.iter().any(|c| c["caller"] == "wrap"));
+        assert!(calls.iter().any(|c| c["caller"] == "View"));
+        assert!(calls.iter().any(|c| c["caller"] == "run"));
+        assert!(calls.iter().any(|c| c["path"] == "other.js" && c["caller"].is_null()));
+        assert!(!calls.iter().any(|c| c["path"] == "other.js" && c["caller"] == "outer"));
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -224,7 +224,7 @@ automatic model invocation and web approval remain unimplemented.
 ### Local symbol lookup
 
 `isa-cli symbols <name> [directory]` finds syntax declarations in supported
-Rust, Python and JavaScript files using Tree-sitter. The optional read-only
+Rust, Python, JavaScript, TypeScript and TSX files using Tree-sitter. The optional read-only
 Ollama agent loop can request the same lookup within its shared three-lookup
 budget. Results include names, kinds, paths and line numbers, and are treated as
 untrusted data. On the web route, the existing workspace confirmation covers
@@ -242,7 +242,7 @@ setting described below.
 
 This is an experimental syntax lookup, not a resolved dependency graph,
 reference finder, or a guarantee of correct localization. It does not support
-all syntax or languages (including TypeScript); arrow-function assignments and
+all syntax or languages; wrapped or destructured function assignments and
 other constructs may be missed. It respects the existing ignore/exclusion rules,
 skips symlinks and bounds individual files, aggregate bytes, visited AST nodes,
 and output; results may be incomplete, including after parse errors or skips.
