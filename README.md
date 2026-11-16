@@ -280,8 +280,8 @@ operation. Successful edits use the same single-file undo record as `apply-edit`
 
 The file is limited to 24 KiB and the instruction to 4,000 bytes; the regular
 proposal and edit limits also apply. This command runs only when explicitly
-invoked from an interactive terminal. It is not available to the browser or as
-an autonomous agent-loop tool. Ollama receives the full file, which may contain
+invoked from an interactive terminal. The browser has a separate read-only
+proposal flow; neither flow is an autonomous agent-loop tool. Ollama receives the full file, which may contain
 secrets; exclusion rules are not a secret scanner. The model may produce an
 incorrect or unsafe change even when formatting is valid, so review it before
 approval. There is no sandbox or race-free protection against a concurrently
@@ -301,6 +301,22 @@ return surrounding source text. The comparison never writes the proposed result.
 In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
 requesting final approval; detected errors do not automatically apply or block a
 change. The user remains responsible for the decision and for running tests.
+
+### Read-only web proposal generation
+
+The composer’s **Propose edit** button opens a separate dialog. Enter an existing
+relative file in the server workspace and an instruction, then explicitly select
+**Send file to Ollama**. The Rust server requires `ISA_WEB_AGENT_WORKSPACE` and
+`ISA_WEB_MODEL`; it sends the entire selected UTF-8 file (up to 24 KiB) and the
+instruction to its configured Ollama model. Secret filtering is incomplete. The
+browser folder picker, selected chat provider and pools are not used. A valid
+single-file proposal can be opened in the separate review dialog; it is not
+saved in chat and no file is edited. If the file changed during the request,
+ISA rejects the response. Cancellation may not stop server-side model work.
+Generated proposals can be wrong or unsafe, path checks are not a sandbox or
+race-free, and local clients can access the endpoint without the browser consent
+flow. Only use a trusted workspace and do not expose the server to untrusted
+clients. This flow does not report model usage in the chat heatmap.
 
 ### Read-only web proposal review
 

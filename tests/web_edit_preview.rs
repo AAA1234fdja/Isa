@@ -30,10 +30,13 @@ impl Server {
         panic!("server did not start");
     }
     fn request(&self, method: &str, origin: Option<&str>, content_type: &str, body: &str) -> (u16, String) {
+        self.request_path("/api/edit-preview", method, origin, content_type, body)
+    }
+    fn request_path(&self, path: &str, method: &str, origin: Option<&str>, content_type: &str, body: &str) -> (u16, String) {
         let mut stream = TcpStream::connect(&self.address).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let origin_header = origin.map(|s| format!("Origin: {s}\r\n")).unwrap_or_default();
-        write!(stream, "{method} /api/edit-preview HTTP/1.1\r\nHost: {}\r\n{origin_header}Content-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", self.address, body.len()).unwrap();
+        write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\n{origin_header}Content-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", self.address, body.len()).unwrap();
         let mut response = String::new(); stream.read_to_string(&mut response).unwrap();
         let (headers, body) = response.split_once("\r\n\r\n").unwrap();
         let status = headers.lines().next().unwrap().split_whitespace().nth(1).unwrap().parse().unwrap();
@@ -121,5 +124,18 @@ fn endpoint_reports_advisory_syntax_without_changing_the_source() {
     assert!(!value["syntax"]["afterIssues"].as_array().unwrap().is_empty());
     assert!(!body.contains("fn main"));
     assert_eq!(fs::read_to_string(server.workspace.join("source.rs")).unwrap(), "fn main() {}\n");
+    assert!(!server.workspace.join(".isa").exists());
+}
+
+#[test]
+fn generation_endpoint_requires_origin_and_server_configuration() {
+    let server = Server::start(true);
+    fs::write(server.workspace.join("source.txt"), "old").unwrap();
+    let body = serde_json::json!({"file":"source.txt","instruction":"change it"}).to_string();
+    let origin = format!("http://{}", server.address);
+    assert_eq!(server.request_path("/api/edit-proposal", "POST", Some("https://evil.example"), "application/json", &body).0, 403);
+    assert_eq!(server.request_path("/api/edit-proposal", "POST", Some(&origin), "application/json", &body).0, 503);
+    assert_eq!(server.request_path("/api/edit-proposal", "POST", Some(&origin), "application/json", "{\"file\":\"a\",\"instruction\":\"x\",\"workspace\":\"/\"}").0, 400);
+    assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), "old");
     assert!(!server.workspace.join(".isa").exists());
 }

@@ -1,0 +1,17 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),{TextEncoder,TextDecoder}=require('node:util');
+const {JSDOM}=require(process.env.JSDOM_PATH||'jsdom');
+(async()=>{
+ let calls=[],pending;
+ const dom=new JSDOM(fs.readFileSync('index.html','utf8'),{url:'http://localhost:4174',runScripts:'outside-only',pretendToBeVisual:true,beforeParse(w){
+  w.TextEncoder=TextEncoder;w.TextDecoder=TextDecoder;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.ResizeObserver=class{observe(){}disconnect(){}};w.HTMLElement.prototype.scrollIntoView=function(){};w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false};
+  w.fetch=(url,options)=>{calls.push({url,options});return new Promise(resolve=>{pending=resolve})};
+ }});
+ const w=dom.window;for(const s of w.document.querySelectorAll('script'))if(!s.type||s.type==='text/javascript')w.eval(s.textContent);
+ const tick=()=>new Promise(r=>setTimeout(r,10)),button=(d,text)=>[...d.querySelectorAll('button')].find(b=>b.textContent===text),patch='File: src/a.rs\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE';
+ calls=[];w.document.querySelector('#proposeEditButton').click();let d=w.document.querySelector('.edit-review');assert.match(d.textContent,/complete selected file/);assert.match(d.textContent,/may not stop server-side/);assert.equal(calls.length,0);button(d,'Cancel').click();assert.equal(calls.length,0);
+ w.document.querySelector('#proposeEditButton').click();d=w.document.querySelector('.edit-review');const file=d.querySelector('#proposalFile'),task=d.querySelector('#proposalInstruction');button(d,'Send file to Ollama').click();assert.equal(calls.length,0);file.value='src/a.rs';task.value='rename';button(d,'Send file to Ollama').click();assert.equal(calls.length,1);assert.equal(calls[0].url,'/api/edit-proposal');assert.deepEqual(JSON.parse(calls[0].options.body),{file:'src/a.rs',instruction:'rename'});assert.equal(file.disabled,true);
+ pending({ok:true,json:async()=>({proposal:patch,readOnly:true})});await tick();assert.equal(file.disabled,false);assert.match(d.textContent,/nothing was applied/);const review=button(d,'Review generated proposal');assert.ok(review);review.click();d=w.document.querySelector('.edit-review');assert.equal(d.querySelector('textarea').value,patch);assert.equal(calls.length,1);button(d,'Close').click();
+ calls=[];w.document.querySelector('#proposeEditButton').click();d=w.document.querySelector('.edit-review');d.querySelector('#proposalFile').value='a';d.querySelector('#proposalInstruction').value='test';button(d,'Send file to Ollama').click();const signal=calls[0].options.signal;button(d,'Cancel').click();assert.equal(signal.aborted,true);pending({ok:true,json:async()=>({proposal:patch,readOnly:true})});await tick();assert.equal(w.document.querySelector('.edit-review'),null);
+ calls=[];w.document.querySelector('#proposeEditButton').click();d=w.document.querySelector('.edit-review');d.querySelector('#proposalFile').value='a';d.querySelector('#proposalInstruction').value='test';button(d,'Send file to Ollama').click();pending({ok:false,json:async()=>({error:'Model unavailable'})});await tick();assert.match(d.textContent,/Model unavailable/);assert.equal(button(d,'Review generated proposal'),undefined);button(d,'Cancel').click();
+ w.close();console.log('Read-only web proposal generation UI passed');
+})().catch(e=>{console.error(e);process.exit(1)});

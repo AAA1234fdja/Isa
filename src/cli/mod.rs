@@ -471,6 +471,10 @@ pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, Str
     }
 }
 
+pub fn web_propose_edit(root: &std::path::Path, file: &str, task: &str, model: &str) -> Result<String> {
+    edit::web_propose(root, std::path::Path::new(file), task, model)
+}
+
 pub fn web_preview_edit(root: &std::path::Path, proposal: &str) -> std::result::Result<serde_json::Value, &'static str> {
     edit::preview_proposal(root, proposal)
 }

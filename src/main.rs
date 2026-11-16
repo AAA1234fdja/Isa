@@ -119,6 +119,15 @@ fn parse_symbol_query(body: &[u8]) -> Result<(String, SymbolMode), &'static str>
     Ok((query.to_owned(), parsed.mode))
 }
 
+fn parse_edit_generation(body: &[u8]) -> Result<(String, String), &'static str> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Request { file: String, instruction: String }
+    let parsed: Request = serde_json::from_slice(body).map_err(|_| "Invalid request.")?;
+    if parsed.file.is_empty() || parsed.file.len() > 1024 || parsed.file.chars().any(char::is_control) || parsed.instruction.trim().is_empty() || parsed.instruction.len() > 4000 || parsed.instruction.chars().any(|c| c.is_control() && c != '\n' && c != '\t') { return Err("Invalid request."); }
+    Ok((parsed.file, parsed.instruction))
+}
+
 fn parse_edit_preview(body: &[u8]) -> Result<String, &'static str> {
     #[derive(serde::Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -198,6 +207,19 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
                 let available = env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty());
                 ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"symbolLookupAvailable":agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
             }
+        },
+        ("POST", "/api/edit-proposal") => {
+            if !request.is_same_origin_json() {
+                ("403 Forbidden", "application/json", br#"{"error":"Same-origin JSON request required"}"#.to_vec())
+            } else if let Ok((file, instruction)) = parse_edit_generation(&request.body) {
+                match (agent_workspace(), env::var("ISA_WEB_MODEL").ok().filter(|s| !s.trim().is_empty())) {
+                    (Some(root), Some(model)) => match cli::web_propose_edit(&root, &file, &instruction, &model) {
+                        Ok(proposal) => ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"proposal":proposal,"readOnly":true})).unwrap_or_default()),
+                        Err(_) => ("422 Unprocessable Entity", "application/json", br#"{"error":"Could not generate a valid proposal. Check the file, instruction, workspace and Ollama configuration; the file may have changed."}"#.to_vec()),
+                    },
+                    _ => ("503 Service Unavailable", "application/json", br#"{"error":"Configure ISA_WEB_MODEL and ISA_WEB_AGENT_WORKSPACE on the Rust server."}"#.to_vec()),
+                }
+            } else { ("400 Bad Request", "application/json", br#"{"error":"Invalid request."}"#.to_vec()) }
         },
         ("POST", "/api/edit-preview") => {
             if !request.is_same_origin_json() {
@@ -362,6 +384,13 @@ mod web_chat_tests {
         assert!(parse_web_chat(&serde_json::to_vec(&invalid_image).unwrap()).is_err());
         let large = serde_json::json!({"messages":[{"role":"user","text":"test"}],"attachments":[{"name":"large.txt","kind":"text","text":"x".repeat(20481)}]});
         assert!(parse_web_chat(&serde_json::to_vec(&large).unwrap()).is_err());
+    }
+    #[test]
+    fn edit_generation_request_is_strict_and_bounded() {
+        assert!(parse_edit_generation(br#"{"file":"src/a.rs","instruction":"rename"}"#).is_ok());
+        assert!(parse_edit_generation(br#"{"file":"a","instruction":"x","workspace":"/"}"#).is_err());
+        assert!(parse_edit_generation(br#"{"file":"a","instruction":" "}"#).is_err());
+        assert!(parse_edit_generation(serde_json::json!({"file":"a","instruction":"x".repeat(4001)}).to_string().as_bytes()).is_err());
     }
     #[test]
     fn edit_preview_request_is_strict_and_bounded() {
