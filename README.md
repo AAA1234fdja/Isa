@@ -28,19 +28,22 @@ Agents, folders, knowledge, and automations are interface placeholders, not conn
 
 ## ISA CLI: initial backend
 
-The Rust CLI is an initial foundation, not a complete coding agent. Run `cargo run --bin isa-cli -- help` for commands. It can list files, perform bounded literal text searches, show a limited Git status, store named local chat sessions, and send chat messages to an Ollama server on `127.0.0.1:11434`. Set `ISA_MODEL` to choose an installed model. For example:
+The Rust CLI is an initial foundation, not a complete coding agent. Run `cargo run --bin isa-cli -- help` for commands. It can list files, perform bounded literal text searches, show a limited Git status, rank files with lexical search, review exact text replacements and undo the most recent replacement, store named local chat sessions, and send chat messages to an Ollama server on `127.0.0.1:11434`. Set `ISA_MODEL` to choose an installed model. For example:
 
 ```sh
 cargo run --bin isa-cli -- files .
 cargo run --bin isa-cli -- search "TODO" .
 cargo run --bin isa-cli -- context .
+cargo run --bin isa-cli -- rank "authentication handler" .
+cargo run --bin isa-cli -- replace path/to/file "old text" "new text" .
+cargo run --bin isa-cli -- undo .
 cargo run --bin isa-cli -- chat my-session .
 cargo run --bin isa-cli -- history my-session .
 ```
 
-Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Its file filtering is not a complete secret scanner or a security sandbox. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
+Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
 
-Semantic indexing, AST-aware context, tool calling, editing, approvals, sandboxing, MCP, Git undo, streaming, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
+Semantic indexing, AST-aware context, model tool calling, agent-driven editing, sandboxing, MCP, Git undo, streaming, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
 
 ### Design references
 

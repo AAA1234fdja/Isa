@@ -1,3 +1,5 @@
+mod context;
+mod edit;
 mod repository;
 mod session;
 
@@ -12,12 +14,15 @@ Usage:\n\
   isa-cli files [directory]                 List workspace files\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
+  isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
+  isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
+  isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli sessions [directory]              List saved sessions\n\
   isa-cli history <session-id> [directory]  Show a saved session\n\
   isa-cli chat <session-id> [directory]     Chat with a local Ollama model\n\n\
 Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
 Sessions are stored locally under .isa/sessions.\n\
-No file writes or commands are executed on behalf of the model.";
+The model cannot execute commands or make file edits.";
 
 fn argument(args: &[String], index: usize, name: &str) -> Result<String> {
     args.get(index)
@@ -70,6 +75,24 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 Ok(context) => println!("\nGit status:\n{context}"),
                 Err(error) => eprintln!("Git context unavailable: {error}"),
             }
+        }
+        Some("rank") => {
+            let query = argument(&args, 1, "query")?;
+            let root = directory(&args, 2)?;
+            for result in context::rank(&root, &query, 20)? {
+                println!("{} ({:.3})\n{}\n", result.path.display(), result.score, result.excerpt);
+            }
+        }
+        Some("replace") => {
+            let file = argument(&args, 1, "file")?;
+            let old = argument(&args, 2, "search text")?;
+            let new = args.get(3).ok_or("missing replacement text")?;
+            let root = directory(&args, 4)?;
+            edit::replace(&root, std::path::Path::new(&file), &old, new)?;
+        }
+        Some("undo") => {
+            let root = directory(&args, 1)?;
+            edit::undo(&root)?;
         }
         Some("sessions") => {
             let root = directory(&args, 1)?;
