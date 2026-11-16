@@ -365,7 +365,9 @@ fn decoy_server_returns_explicit_non_ai_response() {
         .current_dir(workspace.path()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn().expect("start decoy");
     let mut guard = ChildGuard(process);
+    let started = std::time::Instant::now();
     let mut stream = loop {
+        if started.elapsed() > Duration::from_secs(5) { panic!("decoy did not start in time"); }
         if let Some(status) = guard.0.try_wait().unwrap() { panic!("decoy exited early: {status}"); }
         match TcpStream::connect("127.0.0.1:4180") {
             Ok(stream) => break stream,
@@ -380,5 +382,5 @@ fn decoy_server_returns_explicit_non_ai_response() {
     assert!(response.contains("200 OK"), "{response}");
     let value: serde_json::Value = serde_json::from_str(response.split("\r\n\r\n").nth(1).unwrap()).unwrap();
     assert_eq!(value["provider"], "decoy");
-    assert!(value["content"].as_str().unwrap().contains("not an AI response"));
+    assert!(value["content"].as_str().unwrap().contains("rather than an AI response"));
 }

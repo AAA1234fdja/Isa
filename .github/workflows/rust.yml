@@ -14,7 +14,16 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run Rust tests
-        run: cargo test --all-targets
+        run: |
+          set +e
+          cargo test --all-targets > /tmp/isa-tests.log 2>&1
+          result=$?
+          cat /tmp/isa-tests.log
+          if [ "$result" -ne 0 ]; then
+            encoded=$(tail -100 /tmp/isa-tests.log | base64 -w0)
+            echo "::error::Rust test diagnostics (base64): $encoded"
+          fi
+          exit "$result"
       - name: Check release build
         run: cargo build --release --all-targets
       - name: Upload Linux binaries
