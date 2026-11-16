@@ -20,7 +20,7 @@ impl Message {
     }
 }
 
-fn validate_id(id: &str) -> Result<()> {
+pub(super) fn validate_id(id: &str) -> Result<()> {
     if id.is_empty() || id.len() > 80 || !id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_') {
         return Err("session ID must contain only letters, numbers, '-' or '_' (maximum 80 characters)".into());
     }
@@ -128,6 +128,7 @@ fn select_context(messages: &[Message]) -> Vec<Value> {
         selected.push(json!({"role": message.role, "content": message.content}));
     }
     selected.reverse();
+    selected.insert(0, json!({"role": "system", "content": "Write clean, maintainable code. Avoid unnecessary notes and comments; retain comments when they explain important intent or safety constraints."}));
     selected
 }
 

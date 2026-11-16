@@ -3,6 +3,7 @@ mod edit;
 mod registry;
 mod repository;
 mod session;
+mod summary;
 mod work;
 
 use std::error::Error;
@@ -27,6 +28,7 @@ Usage:\n\
   isa-cli sessions [directory]              List saved sessions\n\
   isa-cli session-search <text> [directory] Search local session messages\n\
   isa-cli history <session-id> [directory]  Show a saved session\n\
+  isa-cli resume <session-id> <AC|LP> [directory]  Show a saved summary\n\
   isa-cli chat <session-id> [directory]     Chat with a local Ollama model\n\
   isa-cli ask <session-id> <prompt> [directory]  Run one local model request\n\n\
 Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
@@ -152,6 +154,12 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 println!("{}: {}\n", message.role, message.content);
             }
         }
+        Some("resume") => {
+            let id = argument(&args, 1, "session ID")?;
+            let variant = summary::Variant::parse(&argument(&args, 2, "summary variant")?)?;
+            let root = directory(&args, 3)?;
+            println!("{}", summary::read(&root, &id, variant)?);
+        }
         Some("chat") => {
             let id = argument(&args, 1, "session ID")?;
             let root = directory(&args, 2)?;
@@ -255,6 +263,18 @@ fn chat(root: &std::path::Path, id: &str, model: &str) -> Result<()> {
         if input == "/quit" {
             break;
         }
+        if input.eq_ignore_ascii_case("./help/.") {
+            println!("Commands: ./help/. shows this help; ./resume-AC/. shows the all-chat summary; ./resume-LP/. shows the latest-prompt summary; /quit exits. These commands do not add messages to the session. Summaries are generated after completed model responses.");
+            continue;
+        }
+        let variant = if input.eq_ignore_ascii_case("./resume-AC/.") { Some(summary::Variant::AllChat) } else if input.eq_ignore_ascii_case("./resume-LP/.") { Some(summary::Variant::LastPrompt) } else { None };
+        if let Some(variant) = variant {
+            match summary::read(root, id, variant) {
+                Ok(text) => println!("{text}"),
+                Err(_) => eprintln!("No saved summary is available for this session and variant."),
+            }
+            continue;
+        }
         if input.is_empty() {
             continue;
         }
@@ -289,6 +309,11 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
     if let Err(error) = session::save(root, id, messages) {
         messages.pop();
         return Err(error);
+    }
+    for variant in [summary::Variant::AllChat, summary::Variant::LastPrompt] {
+        if let Err(error) = summary::generate(root, id, model, variant, messages) {
+            eprintln!("Summary update failed: {error}");
+        }
     }
     Ok(())
 }

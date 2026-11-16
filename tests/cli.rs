@@ -321,3 +321,32 @@ fn work_status_skips_binary_and_ignored_files() {
     assert_eq!(value["removed"], 0);
     assert_eq!(value["skipped_files"], 1);
 }
+
+#[test]
+fn utility_commands_do_not_modify_cli_conversation() {
+    use std::io::Write;
+    let workspace = Workspace::new();
+    let original = r#"{"version":1,"messages":[{"role":"user","content":"Existing message"}]}"#;
+    workspace.write(".isa/sessions/example.json", original);
+    workspace.write(".isa/summaries/example-AC.md", "Existing summary");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_isa-cli"))
+        .current_dir(workspace.path())
+        .args(["chat", "example"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn().expect("start chat");
+    child.stdin.take().unwrap().write_all(b"./help/.\n./resume-AC/.\n./resume-LP/.\n/quit\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("Existing summary"));
+    assert!(stderr(&output).contains("No saved summary"));
+    assert_eq!(fs::read_to_string(workspace.path().join(".isa/sessions/example.json")).unwrap(), original);
+}
+
+#[test]
+fn resume_rejects_invalid_session_ids_and_variants() {
+    let workspace = Workspace::new();
+    assert!(!cli(&["resume", "../outside", "AC"], &workspace).status.success());
+    assert!(!cli(&["resume", "example", "invalid"], &workspace).status.success());
+}
