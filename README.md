@@ -4,6 +4,10 @@ ISA is an early-stage application. The application logic starts in Rust; the cur
 
 Chat provider configuration and credential limitations are documented in [docs/providers.md](docs/providers.md).
 
+## Evaluation evidence
+
+A user-provided evaluation reports results for two agent configurations on 20 software-engineering questions inspired by SWE-bench. Both received a reported average score of **9.75/10**. See the [evaluation summary](docs/evaluation.md) for the per-case scores and important limitations. These are reported assessment scores, not a verified SWE-bench resolution rate.
+
 ## Run
 
 Install the Rust toolchain, then run:
