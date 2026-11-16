@@ -20,7 +20,7 @@ jobs:
           result=$?
           cat /tmp/isa-tests.log
           if [ "$result" -ne 0 ]; then
-            encoded=$(tail -100 /tmp/isa-tests.log | base64 -w0)
+            encoded=$(tail -35 /tmp/isa-tests.log | base64 -w0)
             echo "::error::Rust test diagnostics (base64): $encoded"
           fi
           exit "$result"
