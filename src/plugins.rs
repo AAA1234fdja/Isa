@@ -59,6 +59,10 @@ fn words(text: &str) -> HashSet<String> {
     text.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| w.len() >= 4 && w.len() <= 40)
         .map(str::to_ascii_lowercase).filter(|w| !matches!(w.as_str(), "this"|"that"|"with"|"from"|"your"|"have"|"using"|"when"|"user"|"skill"|"skills"|"create"|"build"|"project"|"work"|"code"|"help"|"design"|"application"|"development"|"software")) .collect()
 }
+pub fn filter_groups(ids: Vec<String>, software_engineering_enabled: bool) -> Vec<String> {
+    if software_engineering_enabled { return ids; }
+    ids.into_iter().filter(|id| !matches!(id.as_str(), "architecture" | "devops" | "docs" | "frontend" | "java" | "node" | "programming-skills" | "python" | "workflow")).collect()
+}
 pub fn references(root: &Path, task: &str, enabled: &[String]) -> Vec<Value> {
     let query = words(task); if query.is_empty() { return Vec::new(); }
     let mut matches: Vec<_> = scan(root).into_iter().filter(|s| enabled.contains(&s.plugin)).filter_map(|s| {
@@ -76,6 +80,11 @@ pub fn references(root: &Path, task: &str, enabled: &[String]) -> Vec<Value> {
 }
 #[cfg(test)] mod tests {
     use super::*;
+    #[test] fn disabling_collection_filters_only_its_folders() {
+        let ids = vec!["frontend".to_string(), "custom".to_string()];
+        assert_eq!(filter_groups(ids.clone(), false), vec!["custom"]);
+        assert_eq!(filter_groups(ids.clone(), true), ids);
+    }
     #[test] fn catalog_and_selection_respect_enabled_plugins() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")); let data = catalog(root);
         assert!(data["skillCount"].as_u64().unwrap() >= 100);
