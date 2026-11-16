@@ -55,6 +55,7 @@ pub fn respond<F: FnMut(&str) -> Result<()>>(root: &Path, model: &str, messages:
     let mode = Mode::parse(&std::env::var("ISA_HARNESS_MODE").unwrap_or_default())?;
     let retrieval = retrieval::Retrieval::parse(&std::env::var("ISA_HARNESS_CONTEXT").unwrap_or_default())?;
     let prepared = retrieval::prepare(root, messages, retrieval)?;
+    let prepared = super::skills::prepare(root, &prepared, &std::env::var("ISA_SKILLS").unwrap_or_default())?;
     execute(&mut Ollama, model, &prepared, mode, &mut on_chunk)
 }
 

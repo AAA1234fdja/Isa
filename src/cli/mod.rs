@@ -1,5 +1,7 @@
 #[path = "../../Harness Isa/mod.rs"]
 mod harness;
+#[path = "../../Skills/mod.rs"]
+mod skills;
 mod connectors;
 mod context;
 mod semantic;
@@ -22,6 +24,7 @@ Usage:\n\
   isa-cli search <text> [directory]         Search text in workspace files\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
+  isa-cli skill <command> ...               Manage reusable skills\n\
   isa-cli harness-eval <suite.json> <mode>   Evaluate response harness checks\n\
   isa-cli semantic-index <model> [directory] Build local embedding index\n\
   isa-cli semantic-search <query> [directory] Search the embedding index\n\
@@ -101,6 +104,7 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let root = directory(&args, if staged { 2 } else { 1 })?;
             print!("{}", repository::git_diff(&root, staged)?);
         }
+        Some("skill") => skill_command(&args[1..])?,
         Some("harness-eval") => {
             let suite = argument(&args, 1, "suite file")?;
             let mode = argument(&args, 2, "mode: quick, balanced, or thorough")?;
@@ -213,6 +217,37 @@ pub fn run(args: Vec<String>) -> Result<()> {
             run_turn(&root, &id, &model, &mut messages, &prompt)?;
         }
         Some(other) => return Err(format!("unknown command: {other}\n\n{HELP}").into()),
+    }
+    Ok(())
+}
+
+fn skill_command(args: &[String]) -> Result<()> {
+    match args.first().map(String::as_str) {
+        Some("list") if args.len() <= 2 => {
+            let root = directory(args, 1)?;
+            for (id, enabled) in skills::list(&root)? { println!("{} [{}]", id, if enabled { "enabled" } else { "disabled" }); }
+        }
+        Some("show") if (2..=3).contains(&args.len()) => {
+            let id = argument(args, 1, "skill ID")?; let root = directory(args, 2)?;
+            println!("{}", skills::show(&root, &id)?);
+        }
+        Some(action @ ("create" | "edit")) if (3..=4).contains(&args.len()) => {
+            let id = argument(args, 1, "skill ID")?; let path = argument(args, 2, "skill text file")?; let root = directory(args, 3)?;
+            let content = skills::read_input(std::path::Path::new(&path))?;
+            skills::save(&root, &id, &content, action == "create")?;
+            println!("Skill {id} saved disabled. Review and enable it before use.");
+        }
+        Some(action @ ("enable" | "disable" | "delete")) if (2..=3).contains(&args.len()) => {
+            let id = argument(args, 1, "skill ID")?; let root = directory(args, 2)?;
+            if action == "delete" { skills::remove(&root, &id)?; println!("Skill {id} deleted."); }
+            else { skills::set_enabled(&root, &id, action == "enable")?; println!("Skill {id} {}.", if action == "enable" { "enabled" } else { "disabled" }); }
+        }
+        Some("propose") if (3..=4).contains(&args.len()) => {
+            let id = argument(args, 1, "skill ID")?; let task = argument(args, 2, "task")?; let root = directory(args, 3)?;
+            let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".into());
+            skills::propose(&root, &id, &task, &model)?;
+        }
+        _ => return Err("usage: skill list [dir] | show <id> [dir] | create|edit <id> <text-file> [dir] | enable|disable|delete <id> [dir] | propose <id> <task> [dir]".into()),
     }
     Ok(())
 }

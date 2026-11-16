@@ -147,3 +147,5 @@ Start Ollama and pull the specified model first. The browser sends recent text m
 The response harness supports explicit call budgets (`ISA_HARNESS_MODE=quick`, `balanced`, or `thorough`) and optional project retrieval (`ISA_HARNESS_CONTEXT=lexical` or `semantic`, disabled by default). See [Harness Isa](Harness%20Isa/README.md) for privacy, workspace selection, and safety limitations.
 
 For repeatable, explicitly defined harness checks, use `isa-cli harness-eval <suite.json> <quick|balanced|thorough>`. This sends each case to the local model and reports simple assertion results, not a general quality score. See [Harness Isa](Harness%20Isa/README.md) for the suite format and limitations.
+
+ISA supports reviewed, text-only local skills for the response harness. See [Skills](Skills/README.md) for creation, editing, enable/disable, model-generated proposals, and on-demand selection. Skills do not run tools or grant permissions.

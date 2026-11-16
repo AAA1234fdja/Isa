@@ -32,3 +32,5 @@ ISA_MODEL=llama3.2 isa-cli harness-eval 'Harness Isa/examples/smoke-suite.json' 
 ```
 
 The required mode selects the actual harness pipeline regardless of `ISA_HARNESS`. Evaluation deliberately does not retrieve workspace files. Each independent case has a prompt and at least one case-insensitive substring `contains` or `excludes` check, or `max_chars`. The JSON report includes pass/fail, failed check indices and timing, but omits prompts and answers; provider failures are reported without the provider error text. A failed case exits nonzero. Suites are capped at 20 cases and 256 KiB. These simple checks measure only the specific assertions; they cannot establish factuality, safety, semantic quality, or a statistically meaningful improvement. Model outputs and timing can vary across runs, and each case can trigger up to four model calls. Never include secrets in test prompts. The example suite is a minimal wiring check, not a quality benchmark.
+
+Optional user-reviewed skill references can be selected with `ISA_SKILLS`; see [Skills](../Skills/README.md). They are disabled by default and are not executable tools.

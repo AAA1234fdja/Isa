@@ -384,3 +384,29 @@ fn decoy_server_reports_missing_provider() {
     assert_eq!(value["provider"], "decoy");
     assert_eq!(value["error"]["code"], "no_provider");
 }
+
+#[test]
+fn skill_commands_manage_reviewed_local_guidance() {
+    let workspace = Workspace::new();
+    workspace.write("skill.txt", "Review Rust tests before reporting completion.\n");
+    let output = cli(&["skill", "create", "rust-testing", "skill.txt"], &workspace);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let list = cli(&["skill", "list"], &workspace);
+    assert!(stdout(&list).contains("rust-testing [disabled]"));
+    assert!(cli(&["skill", "enable", "rust-testing"], &workspace).status.success());
+    assert!(stdout(&cli(&["skill", "show", "rust-testing"], &workspace)).contains("[enabled]"));
+    workspace.write("skill.txt", "Updated advice.\n");
+    assert!(cli(&["skill", "edit", "rust-testing", "skill.txt"], &workspace).status.success());
+    assert!(stdout(&cli(&["skill", "show", "rust-testing"], &workspace)).contains("[disabled]"));
+    assert!(cli(&["skill", "delete", "rust-testing"], &workspace).status.success());
+    assert!(stdout(&cli(&["skill", "list"], &workspace)).is_empty());
+}
+
+#[test]
+fn skill_proposals_require_interactive_review() {
+    let workspace = Workspace::new();
+    let output = cli(&["skill", "propose", "test-skill", "Review the task"], &workspace);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("interactive terminal"));
+    assert!(!workspace.path().join(".isa/skills/test-skill.json").exists());
+}
