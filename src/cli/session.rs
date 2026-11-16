@@ -176,7 +176,12 @@ fn consume_stream<R: std::io::BufRead, F: FnMut(&str) -> Result<()>>(mut reader:
 }
 
 pub fn ollama_stream<F: FnMut(&str) -> Result<()>>(model: &str, messages: &[Message], on_chunk: F) -> Result<String> {
-    let selected = select_context(messages);
+    ollama_stream_with_guidance(model, messages, "", on_chunk)
+}
+
+pub fn ollama_stream_with_guidance<F: FnMut(&str) -> Result<()>>(model: &str, messages: &[Message], guidance: &str, on_chunk: F) -> Result<String> {
+    let mut selected = select_context(messages);
+    if !guidance.is_empty() { selected.insert(1, json!({"role": "system", "content": guidance})); }
     if selected.is_empty() { return Err("no messages fit in the model context".into()); }
     let client = reqwest::blocking::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(120)).build()?;
     let response = client.post("http://127.0.0.1:11434/api/chat")

@@ -1,3 +1,5 @@
+#[path = "../../Harness Isa/mod.rs"]
+mod harness;
 mod connectors;
 mod context;
 mod semantic;
@@ -37,6 +39,7 @@ Usage:\n\
   isa-cli chat <session-id> [directory]     Chat with a local Ollama model\n\
   isa-cli ask <session-id> <prompt> [directory]  Run one local model request\n\n\
 Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
+Set ISA_HARNESS=0 to disable response adaptation.\n\
 Sessions are stored locally under .isa/sessions.\n\
 The model cannot execute commands or make file edits.";
 
@@ -321,7 +324,7 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
         return Err(error);
     }
     let terminal = io::stdout().is_terminal();
-    let reply = session::ollama_stream(model, messages, |chunk| {
+    let display = |chunk: &str| -> Result<()> {
         let safe;
         let displayed = if terminal {
             safe = chunk.chars().map(|c| if c == '\n' || c == '\t' || !c.is_control() { c } else { '�' }).collect::<String>();
@@ -330,7 +333,12 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
         print!("{displayed}");
         io::stdout().flush()?;
         Ok(())
-    })?;
+    };
+    let reply = if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
+        session::ollama_stream(model, messages, display)?
+    } else {
+        harness::respond(model, messages, display)?
+    };
     println!();
     messages.push(session::Message::new("assistant", &reply));
     if let Err(error) = session::save(root, id, messages) {
