@@ -7,10 +7,13 @@ mod context;
 mod agent_loop;
 mod semantic;
 mod edit;
+mod feedback;
+mod mcp;
 mod registry;
 mod repository;
 mod processes;
 mod session;
+mod symbols;
 mod summary;
 mod work;
 
@@ -27,13 +30,20 @@ Usage:\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
   isa-cli processes [directory]             Supervise approved local processes\n\
+  isa-cli mcp <list|call|propose|loop> ...              Use an approved MCP stdio server\n\
   isa-cli skill <command> ...               Manage reusable skills\n\
   isa-cli harness-eval <suite.json> <mode>   Evaluate response harness checks\n\
   isa-cli semantic-index <model> [directory] Build local embedding index\n\
   isa-cli semantic-search <query> [directory] Search the embedding index\n\
   isa-cli rank <query> [directory]          Rank relevant files with lexical search\n\
+  isa-cli callers <name> [directory]       Find syntactic call sites (no name resolution)\n\
+  isa-cli symbols <name> [directory]       Find syntax declarations (Rust, Python, JS, TS)\n\
   isa-cli pack <query> [directory]          Output a bounded context pack as JSON\n\
   isa-cli replace <file> <old> <new> [directory]  Review and apply an exact replacement\n\
+  isa-cli feedback <file> <instruction> -- <program> [args...]  Test and propose a retry\n\
+  isa-cli check-edit <proposal-file> [directory]  Check one proposal without writing\n\
+  isa-cli apply-edit <proposal-file> [directory]  Review one SEARCH/REPLACE block\n\
+  isa-cli propose-edit <file> <instruction> [directory]  Generate and review one edit\n\
   isa-cli undo [directory]                  Review and undo the last replacement\n\
   isa-cli connector github <command>        Manage the GitHub connection\n\
   isa-cli contract <command> ...            Manage subagent contracts\n\
@@ -49,7 +59,7 @@ Set ISA_MODEL to select an Ollama model (default: llama3.2).\n\
 Set ISA_HARNESS=0 to disable response adaptation.\n\
 Set ISA_AGENT_LOOP=1 to enable a bounded read-only workspace search loop.\n\
 Sessions are stored locally under .isa/sessions.\n\
-The model cannot execute commands or make file edits.";
+The model cannot execute commands or edit files without explicit CLI review and approval.";
 
 fn argument(args: &[String], index: usize, name: &str) -> Result<String> {
     args.get(index)
@@ -109,6 +119,23 @@ pub fn run(args: Vec<String>) -> Result<()> {
             print!("{}", repository::git_diff(&root, staged)?);
         }
         Some("processes") => { if args.len() > 2 { return Err("usage: isa-cli processes [directory]".into()); } let root = directory(&args, 1)?; processes::interactive(&root)?; }
+        Some("mcp") => {
+            let action = argument(&args, 1, "MCP action")?;
+            let root = directory(&args, args.len())?;
+            match action.as_str() {
+                "list" if args.get(2).map(String::as_str) == Some("--") && args.len() >= 4 => mcp::interactive(&root, "list", None, None, &args[3..])?,
+                "call" if args.get(4).map(String::as_str) == Some("--") && args.len() >= 6 => mcp::interactive(&root, "call", Some(&args[2]), Some(&args[3]), &args[5..])?,
+                "loop" if args.get(3).map(String::as_str) == Some("--") && args.len() >= 5 => {
+                    let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".into());
+                    mcp::tool_loop(&root, &args[2], &args[4..], &model)?;
+                },
+                "propose" if args.get(3).map(String::as_str) == Some("--") && args.len() >= 5 => {
+                    let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".into());
+                    mcp::propose(&root, &args[2], &args[4..], &model)?;
+                },
+                _ => return Err("usage: isa-cli mcp list -- <program> [args...] | isa-cli mcp call <tool> <json-object> -- <program> [args...] | isa-cli mcp propose <task> -- <program> [args...] | isa-cli mcp loop <task> -- <program> [args...]".into()),
+            }
+        }
         Some("skill") => skill_command(&args[1..])?,
         Some("harness-eval") => {
             let suite = argument(&args, 1, "suite file")?;
@@ -134,6 +161,16 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 println!("{} ({:.3})\n{}\n", result.path.display(), result.score, result.excerpt);
             }
         }
+        Some("callers") => {
+            let query = argument(&args, 1, "call name")?;
+            let root = directory(&args, 2)?;
+            println!("{}", serde_json::to_string_pretty(&symbols::callers(&root, &query)?)?);
+        }
+        Some("symbols") => {
+            let query = argument(&args, 1, "symbol name")?;
+            let root = directory(&args, 2)?;
+            println!("{}", serde_json::to_string_pretty(&symbols::lookup(&root, &query)?)?);
+        }
         Some("pack") => {
             let query = argument(&args, 1, "query")?;
             let root = directory(&args, 2)?;
@@ -146,6 +183,33 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let new = args.get(3).ok_or("missing replacement text")?;
             let root = directory(&args, 4)?;
             edit::replace(&root, std::path::Path::new(&file), &old, new)?;
+        }
+        Some("feedback") => {
+            let file = argument(&args, 1, "file")?;
+            let instruction = argument(&args, 2, "instruction")?;
+            if args.get(3).map(String::as_str) != Some("--") || args.len() < 5 { return Err("usage: isa-cli feedback <file> <instruction> -- <program> [args...]".into()); }
+            let root = directory(&args, args.len())?;
+            feedback::interactive(&root, std::path::Path::new(&file), &instruction, &args[4..])?;
+        }
+        Some("check-edit") => {
+            if args.len() > 3 { return Err("usage: isa-cli check-edit <proposal-file> [directory]".into()); }
+            let proposal = argument(&args, 1, "proposal file")?;
+            let root = directory(&args, 2)?;
+            let review = edit::check_proposal(&root, std::path::Path::new(&proposal))?;
+            println!("{}", serde_json::to_string_pretty(&review)?);
+        }
+        Some("apply-edit") => {
+            let proposal = argument(&args, 1, "proposal file")?;
+            let root = directory(&args, 2)?;
+            edit::apply_proposal(&root, std::path::Path::new(&proposal))?;
+        }
+        Some("propose-edit") => {
+            if args.len() > 4 { return Err("usage: isa-cli propose-edit <file> <instruction> [directory]".into()); }
+            let file = argument(&args, 1, "file")?;
+            let instruction = argument(&args, 2, "instruction")?;
+            let root = directory(&args, 3)?;
+            let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
+            edit::propose_edit(&root, std::path::Path::new(&file), &instruction, &model)?;
         }
         Some("undo") => {
             let root = directory(&args, 1)?;
@@ -424,6 +488,10 @@ pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, S
     Ok((outcome.answer, outcome.steps))
 }
 
+pub fn web_run_command(root: &std::path::Path, command: &str) -> Result<serde_json::Value> {
+    feedback::web_command(root, command)
+}
+
 // The browser server passes only validated conversation roles to this entry point.
 pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<String> {
     let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
@@ -433,6 +501,23 @@ pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, Str
     } else {
         harness::respond(root, model, &messages, |_| Ok(()))
     }
+}
+
+pub fn web_propose_edit(root: &std::path::Path, file: &str, task: &str, model: &str) -> Result<String> {
+    edit::web_propose(root, std::path::Path::new(file), task, model)
+}
+
+pub fn web_preview_edit(root: &std::path::Path, proposal: &str) -> std::result::Result<serde_json::Value, serde_json::Value> {
+    edit::preview_proposal(root, proposal).map_err(|error| error.json())
+}
+
+// Server workspace is selected by trusted configuration, never by the request.
+pub fn web_symbols(root: &std::path::Path, query: &str) -> Result<serde_json::Value> {
+    symbols::lookup(root, query)
+}
+
+pub fn web_callers(root: &std::path::Path, query: &str) -> Result<serde_json::Value> {
+    symbols::callers(root, query)
 }
 
 // Diff access is read-only and only exposed by the server after explicit configuration.

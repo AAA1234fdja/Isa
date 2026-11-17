@@ -127,15 +127,86 @@ subagent) also coordinates delegation for that group. Only active nodes can
 delegate along their outgoing arrows. Agent output is supplied to
 subsequent models as untrusted reference data. The comparison is a model response,
 not a guaranteed objective evaluation. Delegated tasks and parallel responses are
-shown in expandable Agent pool details and stored locally with the chat. Subagent instructions and configured
-`min_tokens`, `max_tokens`, and `reasoning_effort` are sent to the provider;
-unsupported parameters may cause errors. Blank values are omitted. Each request
-has a 45-second browser timeout. A failed node fails the pool; cancellation
-aborts browser requests but may not stop remote computation.
+shown in expandable Agent pool details and stored locally with the chat. Subagent
+instructions and configured `min_tokens` and `reasoning_effort` are sent to the
+provider. In **Settings → Providers**, choose whether the subagent's maximum
+output setting uses `max_tokens` (the default) or `max_completion_tokens`. A
+separate optional **Maximum reasoning tokens** value can be set on each subagent;
+it is sent as `max_reasoning_tokens` only if the provider's explicit support
+switch is enabled. A configured value with the switch off fails the pool rather
+than being ignored. Existing providers and workflows default to the previous
+behavior; blank values are omitted. These options apply to pool subagents, not
+direct chat or pool agents.
 
-The runner does not invoke tools, plugins, or the Rust harness, and does not
-provide sandboxing or autonomous file editing. A pool may make up to 16 model
-requests per message, can incur charges, and sends the chat history, message,
+Select these parameters only when the provider and model support them. ISA does
+not implement reasoning-token accounting or guarantee separate budgets: either
+output field may include reasoning tokens, and the provider may reject or ignore
+the parameters or combinations. No fallback retries change the requested fields.
+If the provider returns reasoning but no final content,
+ISA displays a specific error without storing the reasoning, and includes any
+reported usage. There is no automatic retry or guarantee that a higher limit
+will work.
+
+Pool delegation requests can optionally use OpenAI-compatible strict JSON Schema
+via the **Request strict JSON Schema for pool delegation** checkbox in each
+custom provider's settings. It defaults off; enable it only for a provider and
+model that support this exact API. ISA still validates task and subagent IDs,
+and rejects unsupported or invalid responses without silently retrying. This
+requests a provider feature; ISA does not implement constrained decoding.
+
+Intermediate agent-to-agent answers are instructed to be concise while retaining
+important findings and uncertainty. To avoid silently discarding material, an
+intermediate answer exceeding 8,000 characters fails the pool instead of being
+truncated; a pool response reported by the provider as stopped by its output
+limit is also rejected. The final user-facing answer is not subject to the
+intermediate character limit. Conciseness and token or latency reductions are not guaranteed. Pool
+requests have a 120-second browser timeout per attempt; other custom-provider
+requests retain 45 seconds. The pool retries transient network errors, timeouts,
+HTTP 408, 429 and 5xx at most twice per model request, with exponential delay
+and jitter. `Retry-After` is honored when visible to the browser; if it exceeds
+five seconds ISA does not retry. A CORS-hidden header cannot be honored.
+Authentication, configuration, invalid output and other non-transient failures
+are not retried. Retries may duplicate remote work and charges even after a
+browser timeout or cancellation; usage for failed attempts may be unknown.
+
+After transient retries are exhausted, an unavailable delegated branch is
+reported to its parent as missing, and a parallel group can continue with its
+remaining successful members. The final answer is explicitly marked partial and
+pool details record the failure; missing work is not presented as completed.
+If all agents in a group fail, its coordinator fails, a non-transient failure
+occurs, or final synthesis fails, the pool may still fail. Cancellation aborts
+browser requests and retry waits but may not stop remote computation. Pool
+can optionally stream the final pool response with OpenAI-compatible SSE: enable
+**Stream final pool response** in the specific provider settings only when that
+provider and model support it. It is off by default. Planning, intermediate
+agents, direct chats, goal/summary helpers and final responses from a parallel
+group with only one surviving agent remain non-streaming. Streaming requires
+normal `stop` and `[DONE]` markers; truncated, malformed or unsupported streams
+fail rather than becoming completed answers. Provisional text is displayed only
+in the active chat and is never saved on interruption, Stop or failure. ISA does
+not retry a stream once visible text was received. Provider usage may be missing
+from streamed responses, and CORS must permit SSE. This has been tested with
+simulated providers, not real provider endpoints.
+
+While a pool is running, the chat displays live, transient status for provider
+requests, retries and pending request count. Status is per chat, not a model
+response, and is cleared on completion or Stop. Parallel events can arrive in
+any order. The provider may continue working after a browser cancellation.
+
+Pool agents do not invoke tools, plugins, or the Rust harness, and the runner does
+not provide sandboxing or autonomous file editing. Optionally, a chat can set a
+**Pool symbol context** query: after explicit per-message confirmation, ISA
+asks the configured Rust server to find matching declarations or syntactic call
+sites (selected in chat settings) and sends up to 15 names, paths and line numbers
+to pool providers as untrusted context. Declaration matching is partial and
+case-insensitive; call-site matching is exact and case-sensitive. Call sites are
+unresolved: identical names may refer to unrelated functions, and dynamic calls
+may be missed. The lookup is bounded and may be incomplete; failure stops the pool.
+It requires `ISA_WEB_AGENT_WORKSPACE`, not the browser folder picker, and is not
+used by goal or context-compression helpers. Results may expose sensitive project
+information. The same-origin endpoint is a development feature, not a security
+boundary against untrusted users of the server. A pool may make up to 16 logical model
+requests per message, with up to three attempts each, can incur charges, and sends the chat history, message,
 attachments, and intermediate responses to its participating providers. Auto
 may also send the same data to multiple providers during fallback. ISA asks for
 confirmation before each such send and lists the destinations. Auto retries
@@ -154,7 +225,7 @@ Browser routing regression tests (mocked providers, no real API calls): start
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
 `node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
-and `node tests/browser-context-errors.cjs`. Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and `node tests/browser-context-errors.cjs`. The dependency-free runtime regressions can be run with `node tests/pool-runtime.cjs` and `node tests/pool-resilience.cjs` and `node tests/pool-stream.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
 
 

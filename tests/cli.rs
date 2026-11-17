@@ -418,3 +418,196 @@ fn process_supervisor_requires_interactive_approval() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("interactive terminal"));
 }
+
+#[test]
+fn check_edit_is_read_only_and_rejects_invalid_proposals() {
+    let workspace = Workspace::new();
+    let proposal = "File: src/a.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE\n";
+    workspace.write("src/a.txt", "first\nold text\n");
+    workspace.write("proposal.txt", proposal);
+    let result = cli(&["check-edit", "proposal.txt"], &workspace);
+    assert!(result.status.success(), "{}", stderr(&result));
+    let value: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(value["file"], "src/a.txt");
+    assert_eq!(value["line"], 2);
+    assert_eq!(value["readOnly"], true);
+    assert_eq!(value["search"], "old");
+    assert_eq!(value["replacement"], "new");
+    assert_eq!(fs::read_to_string(workspace.path().join("src/a.txt")).unwrap(), "first\nold text\n");
+    assert_eq!(fs::read_to_string(workspace.path().join("proposal.txt")).unwrap(), proposal);
+    assert!(!workspace.path().join(".isa").exists());
+    workspace.write("src/a.txt", "old old");
+    let failed = cli(&["check-edit", "proposal.txt"], &workspace);
+    assert!(!failed.status.success());
+    assert!(failed.stdout.is_empty());
+    assert!(!workspace.path().join(".isa").exists());
+    assert_eq!(fs::read_to_string(workspace.path().join("src/a.txt")).unwrap(), "old old");
+    workspace.write("proposal.txt", "File: ../outside\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE");
+    assert!(!cli(&["check-edit", "proposal.txt"], &workspace).status.success());
+    workspace.write("proposal.txt", &"x".repeat(32769));
+    assert!(!cli(&["check-edit", "proposal.txt"], &workspace).status.success());
+    assert!(!cli(&["check-edit", "proposal.txt", ".", "extra"], &workspace).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn check_edit_rejects_symlinked_proposal_and_target() {
+    use std::os::unix::fs::symlink;
+    let workspace = Workspace::new();
+    workspace.write("actual.txt", "old");
+    workspace.write("proposal.txt", "File: link.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE");
+    symlink("actual.txt", workspace.path().join("link.txt")).unwrap();
+    symlink("proposal.txt", workspace.path().join("link-proposal.txt")).unwrap();
+    assert!(!cli(&["check-edit", "proposal.txt"], &workspace).status.success());
+    assert!(!cli(&["check-edit", "link-proposal.txt"], &workspace).status.success());
+    assert_eq!(fs::read_to_string(workspace.path().join("actual.txt")).unwrap(), "old");
+    assert!(!workspace.path().join(".isa").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn interactive_edit_reports_syntax_before_denied_approval() {
+    use std::io::Write;
+    use std::os::fd::FromRawFd;
+    let workspace = Workspace::new();
+    workspace.write("source.rs", "fn main() {}\n");
+    workspace.write("proposal.txt", "File: source.rs\n<<<<<<< SEARCH\nmain()\n=======\nmain(\n>>>>>>> REPLACE");
+    let mut master = -1; let mut slave = -1;
+    let result = unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) };
+    assert_eq!(result, 0, "could not allocate a pseudo-terminal");
+    let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+    let input = unsafe { fs::File::from_raw_fd(slave) };
+    let child = Command::new(env!("CARGO_BIN_EXE_isa-cli"))
+        .current_dir(workspace.path()).args(["apply-edit", "proposal.txt"])
+        .stdin(Stdio::from(input)).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+    terminal.write_all(b"n\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(!output.status.success());
+    let text = stdout(&output);
+    assert!(text.contains("Syntax comparison (Tree-sitter, advisory only"), "{text}");
+    assert!(text.contains("Before: no errors detected"), "{text}");
+    assert!(text.contains("After: errors detected"), "{text}");
+    assert!(stderr(&output).contains("Apply this replacement?"));
+    assert_eq!(fs::read_to_string(workspace.path().join("source.rs")).unwrap(), "fn main() {}\n");
+    assert!(!workspace.path().join(".isa").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn feedback_requires_separate_approvals_and_does_not_edit() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    fn run(workspace: &Workspace, command: &str, replies: &[u8]) -> Output {
+        let mut master = -1; let mut slave = -1;
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
+        let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+        let input = unsafe { fs::File::from_raw_fd(slave) };
+        let output_terminal = input.try_clone().unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_isa-cli")).current_dir(workspace.path())
+            .args(["feedback", "source.rs", "fix it", "--", "sh", "-c", command])
+            .stdin(Stdio::from(input)).stdout(Stdio::from(output_terminal)).stderr(Stdio::piped()).spawn().unwrap();
+        terminal.write_all(replies).unwrap();
+        let mut output = child.wait_with_output().unwrap();
+        let _ = terminal.read_to_end(&mut output.stdout); // PTY may end with EIO on Linux.
+        output
+    }
+    let workspace = Workspace::new(); workspace.write("source.rs", "fn main() {}\n");
+    let denied = run(&workspace, "touch should-not-exist", b"n\n");
+    assert!(!denied.status.success()); assert!(!workspace.path().join("should-not-exist").exists());
+    let failed = run(&workspace, "printf test-failure >&2; exit 1", b"y\nn\n");
+    assert!(!failed.status.success()); let text = stdout(&failed);
+    assert!(text.contains("test-failure")); assert!(text.contains("Send file and diagnostic to Ollama"));
+    assert!(stderr(&failed).contains("model request cancelled"));
+    let passed = run(&workspace, "exit 0", b"y\n");
+    assert!(passed.status.success(), "{}", stderr(&passed));
+    assert!(stdout(&passed).contains("No retry was requested"));
+    assert!(!stdout(&passed).contains("Send file and diagnostic to Ollama"));
+    assert_eq!(fs::read_to_string(workspace.path().join("source.rs")).unwrap(), "fn main() {}\n");
+    assert!(!workspace.path().join(".isa").exists());
+}
+
+#[test]
+fn check_edit_reports_whitespace_hint_without_changing_files() {
+    let workspace = Workspace::new();
+    workspace.write("source.txt", "private text\nlet  x = 1;\n");
+    workspace.write("proposal.txt", "File: source.txt\n<<<<<<< SEARCH\nlet x = 1;\n=======\nlet x = 2;\n>>>>>>> REPLACE");
+    for command in ["check-edit", "apply-edit"] {
+        let output = cli(&[command, "proposal.txt"], &workspace);
+        assert!(!output.status.success()); assert!(stderr(&output).contains("candidate lines"));
+        assert!(stderr(&output).contains("2-2")); assert!(!stderr(&output).contains("private text"));
+        assert_eq!(fs::read_to_string(workspace.path().join("source.txt")).unwrap(), "private text\nlet  x = 1;\n");
+        assert!(!workspace.path().join(".isa").exists());
+    }
+}
+
+#[test]
+fn duplicate_edit_reports_exact_locations_without_changing_files() {
+    let workspace = Workspace::new();
+    workspace.write("source.txt", "private\nold\nother\nold\n");
+    workspace.write("proposal.txt", "File: source.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE");
+    for command in ["check-edit", "apply-edit"] {
+        let output = cli(&[command, "proposal.txt"], &workspace);
+        assert!(!output.status.success()); let err = stderr(&output);
+        assert!(err.contains("Exact match candidate lines")); assert!(err.contains("2-2")); assert!(err.contains("4-4"));
+        assert!(!err.contains("private")); assert!(!workspace.path().join(".isa").exists());
+        assert_eq!(fs::read_to_string(workspace.path().join("source.txt")).unwrap(), "private\nold\nother\nold\n");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn mcp_stdio_requires_server_and_tool_approval() {
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    fn run(workspace: &Workspace, args: &[String], replies: &[u8]) -> Output {
+        let mut master = -1; let mut slave = -1;
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
+        let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+        let input = unsafe { fs::File::from_raw_fd(slave) }; let output = input.try_clone().unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_isa-cli")).current_dir(workspace.path()).args(args)
+            .stdin(Stdio::from(input)).stdout(Stdio::from(output)).stderr(Stdio::piped()).spawn().unwrap();
+        terminal.write_all(replies).unwrap();
+        let mut result = child.wait_with_output().unwrap(); let _ = terminal.read_to_end(&mut result.stdout); result
+    }
+    let workspace = Workspace::new();
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp-server.cjs").to_string_lossy().into_owned();
+    let marker = workspace.path().join("called").to_string_lossy().into_owned();
+    let args = vec!["mcp".into(), "call".into(), "write".into(), "{\"value\":1}".into(), "--".into(), "node".into(), fixture, "valid".into(), marker.clone()];
+    let denied_server = run(&workspace, &args, b"n\n"); assert!(!denied_server.status.success()); assert!(!workspace.path().join("called.started").exists());
+    let denied_tool = run(&workspace, &args, b"y\nn\n"); assert!(!denied_tool.status.success()); assert!(workspace.path().join("called.started").exists()); assert!(!workspace.path().join("called").exists()); assert!(stdout(&denied_tool).contains("Call this exact tool"));
+    let allowed = run(&workspace, &args, b"y\ny\n"); assert!(allowed.status.success(), "{}", stderr(&allowed)); assert!(stdout(&allowed).contains("fixture result"));
+    let params: serde_json::Value = serde_json::from_slice(&fs::read(workspace.path().join("called")).unwrap()).unwrap(); assert_eq!(params["name"], "write"); assert_eq!(params["arguments"]["value"], 1);
+}
+
+
+// Run explicitly in CI after installing the locked official SDK test dependencies.
+#[cfg(unix)]
+#[test]
+fn mcp_official_sdk_stdio_interoperability() {
+    if std::env::var("ISA_MCP_SDK_TEST").as_deref() != Ok("1") { return; }
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    fn run(workspace: &Workspace, args: &[String], replies: &[u8]) -> Output {
+        let mut master = -1; let mut slave = -1;
+        assert_eq!(unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null(), std::ptr::null()) }, 0);
+        let mut terminal = unsafe { fs::File::from_raw_fd(master) };
+        let input = unsafe { fs::File::from_raw_fd(slave) }; let output = input.try_clone().unwrap();
+        let child = Command::new(env!("CARGO_BIN_EXE_isa-cli")).current_dir(workspace.path()).args(args)
+            .stdin(Stdio::from(input)).stdout(Stdio::from(output)).stderr(Stdio::piped()).spawn().unwrap();
+        terminal.write_all(replies).unwrap();
+        let mut result = child.wait_with_output().unwrap(); let _ = terminal.read_to_end(&mut result.stdout); result
+    }
+    let workspace = Workspace::new();
+    let server = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/mcp-sdk/server.mjs").to_string_lossy().into_owned();
+    let marker = workspace.path().join("called").to_string_lossy().into_owned();
+    let command = vec!["node".to_string(), server, marker.clone()];
+    let mut list = vec!["mcp".into(), "list".into(), "--".into()]; list.extend(command.clone());
+    let listed = run(&workspace, &list, b"y\n");
+    assert!(listed.status.success(), "{}", stderr(&listed)); assert!(stdout(&listed).contains("sdk_echo")); assert!(stdout(&listed).contains("sdk_error")); assert!(!workspace.path().join("called").exists());
+    let mut call = vec!["mcp".into(), "call".into(), "sdk_echo".into(), r#"{"message":"hello"}"#.into(), "--".into()]; call.extend(command.clone());
+    let denied = run(&workspace, &call, b"y\nn\n"); assert!(!denied.status.success()); assert!(!workspace.path().join("called").exists());
+    let accepted = run(&workspace, &call, b"y\ny\n"); assert!(accepted.status.success(), "{}", stderr(&accepted)); assert!(stdout(&accepted).contains("SDK echo: hello"));
+    let data: serde_json::Value = serde_json::from_slice(&fs::read(&marker).unwrap()).unwrap(); assert_eq!(data["message"], "hello");
+    let mut fail = vec!["mcp".into(), "call".into(), "sdk_error".into(), "{}".into(), "--".into()]; fail.extend(command);
+    let error = run(&workspace, &fail, b"y\ny\n"); assert!(!error.status.success()); assert!(stdout(&error).contains("SDK tool failure")); assert!(stderr(&error).contains("MCP tool reported an error"));
+}

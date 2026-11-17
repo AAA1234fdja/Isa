@@ -4,6 +4,10 @@ ISA is an early-stage application. The application logic starts in Rust; the cur
 
 Chat provider configuration and credential limitations are documented in [docs/providers.md](docs/providers.md).
 
+## Evaluation evidence
+
+A user-provided evaluation reports results for two agent configurations on 20 software-engineering questions inspired by SWE-bench. Both received a reported average score of **9.75/10**. See the [evaluation summary](docs/evaluation.md) for the per-case scores and important limitations. These are reported assessment scores, not a verified SWE-bench resolution rate.
+
 ## Run
 
 Install the Rust toolchain, then run:
@@ -48,9 +52,9 @@ cargo run --bin isa-cli -- ask my-session "Explain Rust ownership" .
 cargo run --bin isa-cli -- history my-session .
 ```
 
-Sessions are stored in `.isa/sessions` and are not connected to the browser chat. The CLI does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File scanning respects Git ignore rules and excludes several common secret paths, but filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
+Sessions are stored in `.isa/sessions` and are not connected to the browser chat. CLI chat does not automatically send repository contents to Ollama, execute model-generated commands, or modify project files. The separate `propose-edit` command sends a selected file and applies a reviewed change only after explicit approvals. Exact replacements and undo require interactive approval; undo refuses to overwrite a file that has changed since the edit. This is not a sandbox or a race-free defense against a concurrently modified hostile workspace. File scanning respects Git ignore rules and excludes several common secret paths, but filtering is not a complete secret scanner. Session files contain conversation text; keep the workspace private. `context` invokes local Git with selected config settings disabled, but is not a security boundary against an untrusted repository.
 
-Semantic indexing, AST-aware context, model tool calling, agent-driven editing, sandboxing, MCP, Git undo, background jobs, provider routing, and browser integration remain unimplemented. There is no automatic summarization; the Ollama request uses a bounded recent-message window.
+The initial CLI tools do not provide autonomous editing, sandboxing, model-directed MCP tool calling or a resolved repository graph. See the later sections for the separately implemented semantic index, context summaries, browser routing and read-only agent loop.
 
 ### Design references
 
@@ -154,7 +158,60 @@ ISA supports reviewed, text-only local skills for the response harness. See [Ski
 
 ### Command approval interface
 
-The composer offers three locally saved approval preferences: ask every time, ask for high-risk commands, and unrestricted. The last option requires confirmation because it would allow commands without a prompt. These are **UI preferences only**: the current chat harness has no Bash execution or authenticated approval protocol, so the selection does not enforce permissions or execute anything. The reusable command review component is prepared to show a command and working directory with allow once, allow always, and deny; it is not connected to an execution backend. A future backend must enforce the policy, conservatively classify unknown shell commands as high risk, scope remembered approvals to the exact command and working directory, and request a new approach after denial. No command or approval should be accepted solely on the authority of browser state. The Node preview and decoy cannot create real approval requests.
+The composer stores a **per-chat supervision preference**: ask every time,
+ask occasionally (risky or unknown actions), or never ask. New and legacy
+chats default to ask every time; the old global preference is not migrated.
+Selecting never ask requires an explicit confirmation for the current chat.
+For the opt-in local manual command executor below, the Rust server enforces the
+registered per-chat policy. All shell commands are considered high-risk: both
+ask modes require individual approval; never ask starts them without another
+approval. The model cannot invoke the executor. MCP tools and skill actions are
+not connected to this web policy; CLI approvals are separate. Model data-sharing
+consent is also separate. No mode makes the browser a sandbox.
+
+### Opt-in local supervised commands
+
+On Unix only, a user can manually open **Run command** in an existing chat.
+This is disabled by default. Start the Rust server on `127.0.0.1` with an
+explicit trusted workspace and a randomly generated secret, for example:
+
+```sh
+export ISA_WEB_EXEC_WORKSPACE="$PWD"
+export ISA_WEB_EXEC_TOKEN="$(openssl rand -hex 32)"
+cargo run
+```
+
+Enter the token in the dialog on the same local machine; it is retained only in
+page memory until reload and is not saved in the chat. Requests require the
+secret, exact loopback IP/port Host and Origin, local peer, and reject forwarded
+headers. The executor intentionally does **not** work through public preview
+proxies or non-loopback access. Treat the token as a local bearer capability:
+any process or script that obtains it can set policies and authorize commands.
+This is not user authentication against a compromised browser or same-user
+process, and does not replace OS isolation. Do not expose the server or token to
+untrusted clients. Restart the server to clear policies and pending actions.
+
+The server keeps each chat policy in memory and issues a one-use, 120-second
+approval bound to the exact command, workspace and policy version. A policy
+change invalidates pending actions. Denial consumes/cancels an action. In
+occasional mode all shell commands require approval because risk cannot be
+reliably inferred from shell syntax. Never ask executes the manually entered
+command after preparation without a second prompt. The browser never executes
+model-generated text automatically; the user must enter the command. Commands
+run as Bash with the server's permissions and environment, without a sandbox;
+they can read or modify files, access the network, and may spawn descendants.
+The execution token is removed from the child environment, but this does not
+protect it from a hostile same-user process. Output is capped and saved in the
+chat as untrusted text, which later model requests may include. Timeouts and
+closing the dialog are best effort and may not stop descendants or undo side
+effects. Do not blindly retry after a lost response. The Node preview and decoy
+cannot run commands. The server handles at most two concurrent commands.
+
+The browser's local setting is sent to the authenticated server when a manual
+command is prepared; it is not itself an authorization boundary. The server
+cannot distinguish a human click from another bearer using the token. A future
+model-driven executor must use this gate and extend it explicitly for tools and
+skills rather than trusting model output or browser state.
 
 ### Attachments
 
@@ -182,10 +239,234 @@ The configured directory may contain sensitive changes. The server does not auth
 
 `isa-cli processes [directory]` opens an interactive, Unix-only process supervisor. Use `start <name> <bash command>`, `list`, `logs <name>`, `stop <name>`, `remove <name>` (after exit), or `quit`. It starts real background processes in the selected working directory and captures the most recent 64 KiB of combined output in memory. Each new command requires terminal approval; “allow always” applies only to the exact command for the current supervisor session. Denial does not run the command. The supervisor attempts to stop its process groups on exit. Commands run with the user's permissions, without a sandbox, and can access files and the network. Processes that daemonize, escape their process group, or outlive an already-exited group leader may not be stopped automatically. Do not use this as a security isolation mechanism.
 
-The browser has a display component for genuine command and process activity records, but the chat backend **does not yet execute tools or stream those records**. It therefore does not show simulated activity, cannot start or stop these CLI-supervised processes from the browser, and cannot yet automatically suggest an alternative after denial. Browser approval preferences are not connected to this supervisor. The CLI supervisor must stay open to manage its processes; it is not integrated with the Arena live preview system.
+The browser has a display component for genuine command and process activity records. The opt-in manual chat command executor is separate from that activity display; the chat backend **does not yet execute model-requested tools or stream those records**. It therefore does not show simulated activity, cannot start or stop these CLI-supervised processes from the browser, and cannot yet automatically suggest an alternative after denial. Browser approval preferences are not connected to this supervisor. The CLI supervisor must stay open to manage its processes; it is not integrated with the Arena live preview system.
 
 ### Read-only agent loop (experimental)
 
 The Rust Ollama runtime can run a bounded model–search–model loop. For the web server, set both `ISA_WEB_MODEL` and `ISA_WEB_AGENT_WORKSPACE` to a trusted directory before starting ISA, then enable **Read-only agent loop** in the chat settings. Each message requires confirmation before workspace excerpts can be sent to Ollama. The browser folder picker does not configure this server directory. For the CLI, set `ISA_AGENT_LOOP=1`; the chat/ask directory is the search workspace. The normal harness is bypassed during loop turns. Resume and goal helper requests do not use the loop.
 
-The model can request at most three distinct lexical workspace searches before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
+The model can request at most three lexical searches, declaration lookups or call-site lookups combined before returning a final answer. Search results are untrusted and bounded, and invalid decisions or exhausted limits fail rather than executing another action. The UI shows completed search queries, not a live progress stream. The loop cannot edit files, run commands, use MCP, invoke plugins, or execute the task plan. Custom providers and agent pools do not support it. It does not use approval policies for write operations because none are exposed; it is not a sandbox. Existing exclusion rules are not a secret scanner, and filesystem changes or symlinks can create races: only expose a trusted directory whose contents may be sent to the configured model. Model instructions can be influenced by untrusted content. Browser Stop cancels the request, but does not guarantee server-side model or search work stops. Ollama must support the required JSON decision protocol; a noncompliant response is an error. Reported Ollama chat usage is included when available; embedding, failed and cancelled requests may be missing.
+
+### Reviewed SEARCH/REPLACE proposals
+
+The CLI can review one exact replacement from a UTF-8 proposal file:
+
+    File: src/example.rs
+    <<<<<<< SEARCH
+    old text
+    =======
+    new text
+    >>>>>>> REPLACE
+
+Optionally run `cargo run --bin isa-cli -- check-edit proposal.txt /path/to/workspace`
+first. This non-interactive, read-only check prints a JSON review (including the
+submitted search and replacement) to stdout and exits nonzero on failure. It
+does not contact a model, write files, create undo records, or authorize an edit.
+The proposal file is resolved from the current directory; its target path is
+relative to the workspace. Treat JSON output as potentially sensitive and avoid
+sharing it indiscriminately. A successful check reflects only that moment: the
+file can change later, and `apply-edit` still rechecks and requires approval.
+
+Run `cargo run --bin isa-cli -- apply-edit proposal.txt /path/to/workspace`.
+This is a manually initiated CLI operation, not an agent tool or browser
+integration. The proposal accepts exactly one block and an existing, relative
+file path. The delimiter line breaks are not part of the search or replacement;
+add a blank line immediately before a delimiter to include a trailing newline.
+An empty replacement deletes the matched text. Marker lines in the content are
+ambiguous and rejected; control and bidirectional formatting characters in the
+replacement or search are rejected to make review safer. The search must match exactly once, and both sides are
+limited to 4,000 characters. ISA displays the change, requires terminal approval,
+checks the file again after approval, and records the prior contents for the
+existing single-edit `undo` command. It refuses unattended execution, symlink
+paths, protected paths and oversized or binary targets. This mechanism is not a
+sandbox or a race-free defense against a concurrently modified workspace, and
+`.isa/undo.json` can contain file contents. Multi-file transactions, AST edits,
+automatic model invocation and web approval remain unimplemented.
+
+### Local symbol lookup
+
+`isa-cli symbols <name> [directory]` finds syntax declarations in supported
+Rust, Python, JavaScript, TypeScript and TSX files using Tree-sitter. The optional read-only
+Ollama agent loop can request the same lookup within its shared three-lookup
+budget. Results include names, kinds, paths and line numbers, and are treated as
+untrusted data. On the web route, the existing workspace confirmation covers
+sending these results to Ollama. The browser folder picker is not connected to
+the server workspace.
+
+`isa-cli callers <name> [directory]` finds syntactic call sites whose callee
+name exactly matches the query (case-sensitive), including direct and named
+member calls. It reports the nearest named enclosing function when available.
+The read-only Ollama loop can request the same lookup. Matches are not resolved:
+identically named methods can refer to unrelated declarations, and dynamic,
+computed or unsupported calls may be missed. It is not a complete call graph.
+Agent Pools can also request call sites through the optional symbol-context
+setting described below.
+
+This is an experimental syntax lookup, not a resolved dependency graph,
+reference finder, or a guarantee of correct localization. It does not support
+all syntax or languages; wrapped or destructured function assignments and
+other constructs may be missed. It respects the existing ignore/exclusion rules,
+skips symlinks and bounds individual files, aggregate bytes, visited AST nodes,
+and output; results may be incomplete, including after parse errors or skips.
+The workspace file listing itself has a separate cap. File names and symbols
+can contain sensitive information, and exclusions are not a secret scanner. It
+is not a sandbox or a race-free defense against a changing workspace. For Agent Pools, set an optional **Pool symbol context** query in chat settings;
+each message then asks for permission before looking up that name on the Rust
+server and sharing at most 15 matching declarations or unresolved call sites
+and their paths with pool providers. Choose the lookup type in chat settings;
+call-site queries match the callee name exactly and do not resolve identity.
+A lookup failure stops the pool, and goal/summary helpers do not use this
+context. Clear the query to opt out. The model cannot invoke this lookup itself
+in the pool. Direct custom-provider chats do not use it. The endpoint requires
+same-origin JSON and `ISA_WEB_AGENT_WORKSPACE`; like the rest of the development
+server it is not suitable for public deployment or untrusted local clients.
+
+### Model-generated edit proposal in the CLI
+
+`cargo run --bin isa-cli -- propose-edit src/example.rs "Describe the change" /path/to/workspace`
+asks the configured local Ollama model (`ISA_MODEL`) for one SEARCH/REPLACE
+proposal for the selected existing file. ISA first asks permission to send the
+complete file and instruction to Ollama, then separately displays the proposed
+replacement and asks permission to apply it. A malformed proposal, another file
+path, a non-unique match, a file changed since inference, or denial stops the
+operation. Successful edits use the same single-file undo record as `apply-edit`.
+
+The file is limited to 24 KiB and the instruction to 4,000 bytes; the regular
+proposal and edit limits also apply. This command runs only when explicitly
+invoked from an interactive terminal. The browser has a separate read-only
+proposal flow; neither flow is an autonomous agent-loop tool. Ollama receives the full file, which may contain
+secrets; exclusion rules are not a secret scanner. The model may produce an
+incorrect or unsafe change even when formatting is valid, so review it before
+approval. There is no sandbox or race-free protection against a concurrently
+modified workspace, no multi-file transaction, and no automatic test execution.
+
+The `check-edit` JSON, web review, and interactive CLI replacement review
+include an advisory Tree-sitter syntax comparison for Rust, Python, JavaScript, TypeScript and TSX files. It
+checks the in-memory before and proposed-after snapshots (each at most 64 KiB)
+with a best-effort 100 ms parse budget per snapshot. Unsupported, oversized or
+unfinished parses are reported as unavailable, not as passing. A parse without
+errors is not a compiler, type checker, test suite or correctness guarantee;
+existing errors also make it impossible to infer from the two booleans whether
+a particular error is new. For each snapshot ISA reports up to eight approximate
+error or missing-syntax locations (1-based lines and UTF-8 byte columns), with
+an explicit incomplete flag if the bounded traversal is cut short. It does not
+return surrounding source text. The comparison never writes the proposed result.
+In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
+requesting final approval; detected errors do not automatically apply or block a
+change. The user remains responsible for the decision and for running tests.
+
+### MCP tools over stdio (CLI)
+
+ISA supports an explicitly user-driven subset of MCP protocol `2025-06-18`
+over stdio on Unix. From an interactive terminal, use:
+
+```text
+isa-cli mcp list -- <server-program> [server-arguments...]
+isa-cli mcp call <tool-name> '<json-object>' -- <server-program> [server-arguments...]
+isa-cli mcp propose <task> -- <server-program> [server-arguments...]
+isa-cli mcp loop <task> -- <server-program> [server-arguments...]
+```
+
+ISA asks before starting the server, performs initialization and bounded
+`tools/list` discovery, displays the server-provided tool metadata and exact
+arguments, and asks separately before `tools/call`. It does not enforce the
+server-provided JSON Schema. With `propose`, after separate consent ISA sends the task and complete discovered
+metadata (up to 16 KiB combined) to the configured Ollama model. The model can
+suggest at most one call or decline; ISA checks that the name uniquely matches
+and the arguments are an object, then shows the proposal for separate approval.
+After a successful call, the full result is displayed. You can separately approve
+sending the original task, tool name, arguments and result to Ollama for a final
+answer; this is skipped if their serialized size exceeds 32 KiB. Declining does
+not undo the call. ISA performs no further tool calls in this final-answer step,
+and a failed model request does not undo the tool's effects. Tool-reported errors
+are shown and do not trigger a summary. Results can contain secrets or prompt
+injection, and the model's answer may be inaccurate; inspect them before sharing
+or relying on them. Server metadata and model proposals may contain prompt
+injection or unsafe arguments: review them. The browser cannot invoke MCP. Only stdio and this protocol version
+are supported; HTTP, OAuth, resources, prompts, sampling, server requests other than ping, and
+persistent sessions are not implemented. Server pings receive an empty response
+within the same bounded operation; unsupported server requests fail closed. Discovery is limited to three pages and
+100 tools; calls are refused when discovery is incomplete or the name is not unique. Messages and operation time are bounded. A call can have completed
+before a timeout or interruption, so do not blindly retry it.
+
+For a bounded multi-tool workflow, `mcp loop` lets the model propose up to
+three sequential calls to the same stdio server. ISA displays the full context
+and asks before **every** model request, then displays the selected tool and
+arguments and asks before **every** call. The next context includes the full
+results of all prior calls; inspect it for secrets and untrusted instructions
+before approving. The context is capped at 32 KiB without truncation. After
+three calls, the model may give a final answer but cannot call another tool.
+Invalid responses, denial, oversized context, protocol failures, and tool errors
+stop the loop. Prior calls and their effects are never rolled back. A failed or
+timed-out call may already have run: do not blindly retry. Tool descriptions
+and results can change or be malicious; discovery and approval are not a
+sandbox or a guarantee of server behavior. This is CLI-only and uses Ollama,
+not the web agent or a general tool-calling API.
+
+**MCP servers are executable programs, not sandboxes.** Even initialization or
+listing may change files, expose environment variables, access credentials or
+the network. Tool descriptions, schemas and results are untrusted. Only start
+trusted servers and review arguments carefully; inherited permissions and process
+groups do not provide isolation, and escaped descendants may survive. Server
+stderr is discarded. ISA terminates the server process on normal client exit,
+but cannot guarantee cleanup of all descendants or effects.
+
+Protocol reference: [MCP stdio transport and lifecycle](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports).
+
+CI also runs the interactive CLI against a local fixture built using the official
+MCP TypeScript SDK (pinned in `tests/mcp-sdk/package-lock.json`). It exercises
+real protocol initialization, discovery, approval, calls and tool errors. To
+run that optional interoperability test locally, install Node.js and Rust, then:
+
+```sh
+npm ci --ignore-scripts --no-audit --no-fund --prefix tests/mcp-sdk
+ISA_MCP_SDK_TEST=1 cargo test --test cli mcp_official_sdk_stdio_interoperability
+```
+
+This test does not establish compatibility with every MCP server or test an
+actual Ollama model.
+
+
+### Bounded test-feedback loop (CLI)
+
+From the workspace, run `isa-cli feedback <file> <instruction> -- <program> [args...]`.
+ISA shows the exact program and arguments and requires terminal approval before
+each run. It uses the same user-selected command for at most three test runs
+and at most two model proposals. It does not insert a shell; explicitly choosing a shell still
+allows arbitrary commands. The test runs in the real workspace with the user's
+permissions, inherited environment and network access: **there is no sandbox**.
+It can modify files, leak data or leave background processes. The 60-second
+best-effort timeout kills the process group, but escaped descendants may survive.
+
+ISA shows bounded stdout/stderr tails, exit status, timeout and truncation. On
+failure or incomplete output it displays the exact diagnostic to share, then separately asks permission
+to send it and the current complete target file (at most 24 KiB) to Ollama for
+one SEARCH/REPLACE proposal. Logs and source may contain secrets or adversarial
+instructions. ISA displays the proposal and syntax advisory, then requires a
+separate approval to apply it, checks the file snapshot again, and asks again
+before each test rerun. Denial or an error stops the loop; previously applied
+changes are not automatically reverted. The single `undo` record is overwritten
+by each approved edit and can only restore the latest one, if unchanged. The
+result may be wrong, a file can change after checking, and a zero exit code is
+not proof of correctness. This is a bounded, manually approved CLI loop, not an
+autonomous web agent. Unix only. There is no race-free filesystem protection.
+
+### Read-only web proposal generation
+
+The composer’s **Propose edit** button opens a separate dialog. Enter an existing
+relative file in the server workspace and an instruction, then explicitly select
+**Send file to Ollama**. The Rust server requires `ISA_WEB_AGENT_WORKSPACE` and
+`ISA_WEB_MODEL`; it sends the entire selected UTF-8 file (up to 24 KiB) and the
+instruction to its configured Ollama model. Secret filtering is incomplete. The
+browser folder picker, selected chat provider and pools are not used. A valid
+single-file proposal can be opened in the separate review dialog; it is not
+saved in chat and no file is edited. If the file changed during the request,
+ISA rejects the response. Cancellation may not stop server-side model work.
+Generated proposals can be wrong or unsafe, path checks are not a sandbox or
+race-free, and local clients can access the endpoint without the browser consent
+flow. Only use a trusted workspace and do not expose the server to untrusted
+clients. This flow does not report model usage in the chat heatmap.
+
+### Read-only web proposal review
+
+Assistant messages containing `<<<<<<< SEARCH` offer **Review proposal**. Paste or edit one complete `File: …` SEARCH/REPLACE block in the dialog and select **Check proposal**. The Rust server checks the existing UTF-8 file in `ISA_WEB_AGENT_WORKSPACE`, validates the same format and exact unique match used by the CLI, and displays the submitted search and replacement literally. No file or undo record is written; this does not apply a patch. A successful check is a snapshot, not a guarantee that the file remains unchanged. If the search has no exact match, the review, `check-edit`, and CLI replacement operations can report up to five approximate line ranges found by collapsing whitespace (files up to 64 KiB). These are hints only, may be partial or misleading, and contain no source excerpts; inspect the file and correct the proposal manually. They never relax the exact-match rule. If SEARCH matches more than once, including overlapping matches, ISA reports up to five exact-match line ranges for files up to 64 KiB; add context to make the search unique. It never chooses a match automatically. A single complete block surrounded by explanations or Markdown fences is extracted for review. When several unambiguous blocks are detected, choose and load one explicitly; only that block is checked, not the combined changes. Loading replaces any text already in the editor. Ambiguous or incomplete blocks must be edited manually. The review can optionally reveal spaces, tabs and line breaks. After a successful check, **Download proposal** saves the checked text to the browser device as `isa-proposal.txt`; it may contain sensitive content. Transfer it to the CLI host if necessary and run `check-edit` or `apply-edit` there, with the correct workspace. Downloading does not authorize or apply anything, and later checks may fail if the file changed. The browser folder picker does not configure the server workspace. The Node development preview does not implement this endpoint. Path exclusions and symlink checks are not a sandbox or race-free security boundary; use a trusted workspace and server, and do not expose it to untrusted clients.
