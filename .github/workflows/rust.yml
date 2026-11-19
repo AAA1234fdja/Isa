@@ -32,6 +32,8 @@ jobs:
           node tests/agents-workspace.cjs
           node tests/project-workspace.cjs
           node tests/web-supervision.cjs
+          node tests/action-supervision.cjs
+          node tests/web-mcp.cjs
       - name: Run Rust tests
         env:
           ISA_MCP_SDK_TEST: "1"

@@ -156,22 +156,26 @@ For repeatable, explicitly defined harness checks, use `isa-cli harness-eval <su
 
 ISA supports reviewed, text-only local skills for the response harness. See [Skills](Skills/README.md) for creation, editing, enable/disable, model-generated proposals, and on-demand selection. Skills do not run tools or grant permissions.
 
-### Command approval interface
+### Local action supervision
 
 The composer stores a **per-chat supervision preference**: ask every time,
 ask occasionally (risky or unknown actions), or never ask. New and legacy
 chats default to ask every time; the old global preference is not migrated.
 Selecting never ask requires an explicit confirmation for the current chat.
-For the opt-in local manual command executor below, the Rust server enforces the
-registered per-chat policy. All shell commands are considered high-risk: both
-ask modes require individual approval; never ask starts them without another
-approval. The model cannot invoke the executor. MCP tools and skill actions are
-not connected to this web policy; CLI approvals are separate. Model data-sharing
-consent is also separate. No mode makes the browser a sandbox.
+For the opt-in local actions below, the Rust server enforces the registered
+per-chat policy. All shell commands are high-risk: both ask modes require
+individual approval; never ask starts them without another approval. The built-in
+workspace-info action is read-only and reveals only the configured workspace
+path and whether it is a directory; ask every time requires approval, while ask
+occasionally and never ask do not. The server assigns risk, not the client.
+The model and Agent Pools cannot invoke these actions. Manual MCP calls use the same web policy as described below; model-initiated
+MCP calls and skill actions are not connected. CLI approvals are separate. Model
+data-sharing consent is also separate. No mode makes the browser a sandbox.
 
-### Opt-in local supervised commands
+### Opt-in local supervised actions
 
-On Unix only, a user can manually open **Run command** in an existing chat.
+On Unix only, a user can manually open **Run command** or **Workspace info**
+in an existing chat.
 This is disabled by default. Start the Rust server on `127.0.0.1` with an
 explicit trusted workspace and a randomly generated secret, for example:
 
@@ -192,7 +196,7 @@ process, and does not replace OS isolation. Do not expose the server or token to
 untrusted clients. Restart the server to clear policies and pending actions.
 
 The server keeps each chat policy in memory and issues a one-use, 120-second
-approval bound to the exact command, workspace and policy version. A policy
+approval bound to the exact typed action, chat, workspace and policy version. A policy
 change invalidates pending actions. Denial consumes/cancels an action. In
 occasional mode all shell commands require approval because risk cannot be
 reliably inferred from shell syntax. Never ask executes the manually entered
@@ -205,10 +209,17 @@ protect it from a hostile same-user process. Output is capped and saved in the
 chat as untrusted text, which later model requests may include. Timeouts and
 closing the dialog are best effort and may not stop descendants or undo side
 effects. Do not blindly retry after a lost response. The Node preview and decoy
-cannot run commands. The server handles at most two concurrent commands.
+cannot run these actions. The server handles at most two concurrent actions.
+
+Workspace info saves its result as untrusted chat text, which later model
+requests may include; it does not list files or run programs. Its read-only
+classification is specific to this implemented action, not a general claim
+about other tools. The typed action API rejects unknown actions and client-supplied
+risk labels. The legacy command API uses the same supervisor. Adding MCP or
+other tools requires explicit implementations and their own security review.
 
 The browser's local setting is sent to the authenticated server when a manual
-command is prepared; it is not itself an authorization boundary. The server
+action is prepared; it is not itself an authorization boundary. The server
 cannot distinguish a human click from another bearer using the token. A future
 model-driven executor must use this gate and extend it explicitly for tools and
 skills rather than trusting model output or browser state.
@@ -355,6 +366,44 @@ In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
 requesting final approval; detected errors do not automatically apply or block a
 change. The user remains responsible for the decision and for running tests.
 
+### Manual MCP tools in web chat
+
+Unix local sessions can use **MCP tools** in an existing chat after configuring
+the opt-in local action supervisor above. Set `ISA_WEB_MCP_COMMAND` before
+starting the Rust server to a JSON array containing an executable and its
+arguments, for example:
+
+```sh
+export ISA_WEB_MCP_COMMAND='["/usr/bin/node","/absolute/path/to/trusted-server.js"]'
+```
+
+Do not include secrets in the arguments: they appear in the review dialog. The
+server command comes only from backend configuration, never from model output.
+Starting and discovering a server is a high-risk action. Both ask modes require
+approval; never ask permits it without supervisor approval, after the user
+explicitly starts the prepared action. Each tool call is a separate high-risk
+action, with its exact name, JSON arguments, server command, workspace, chat,
+policy and live discovery session bound to a one-use approval. Schema validation
+is not implemented. Incomplete discovery and duplicate names are rejected.
+
+The session expires after five minutes and permits **one tool call**. Closing
+or changing policy invalidates a session; after a call or an error, start and
+approve a new session. Up to four sessions and two concurrent actions are
+allowed. No call is automatically retried. A failed or interrupted call may
+already have had side effects. A running process or descendants may outlive a
+close or timeout. Server metadata and results are untrusted, shown locally in
+the dialog, and are not automatically saved in chat or sent to a model. This
+is manual use only: models and Agent Pools cannot invoke MCP from web chat yet.
+
+MCP servers are executable programs and **not sandboxes**: startup, discovery
+and calls may access files, inherited environment and network or modify data.
+The execution capability and server command configuration are removed from the
+child environment, but hostile same-user processes are not isolated. Use only
+trusted servers and workspaces. CLI MCP has separate approvals and sessions.
+The remote Node preview cannot use this feature. The same bearer-capability
+limitations described above apply; possession of the token is not proof of a
+human approval.
+
 ### MCP tools over stdio (CLI)
 
 ISA supports an explicitly user-driven subset of MCP protocol `2025-06-18`
@@ -382,7 +431,7 @@ and a failed model request does not undo the tool's effects. Tool-reported error
 are shown and do not trigger a summary. Results can contain secrets or prompt
 injection, and the model's answer may be inaccurate; inspect them before sharing
 or relying on them. Server metadata and model proposals may contain prompt
-injection or unsafe arguments: review them. The browser cannot invoke MCP. Only stdio and this protocol version
+injection or unsafe arguments: review them. This CLI flow is separate from manual web MCP above. Only stdio and this protocol version
 are supported; HTTP, OAuth, resources, prompts, sampling, server requests other than ping, and
 persistent sessions are not implemented. Server pings receive an empty response
 within the same bounded operation; unsupported server requests fail closed. Discovery is limited to three pages and

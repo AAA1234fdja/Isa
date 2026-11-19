@@ -551,3 +551,5 @@ mod web_changes_tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
+
+pub(crate) use mcp::WebMcpSession;

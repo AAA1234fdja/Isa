@@ -199,7 +199,7 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
-        ("POST", "/api/exec/policy" | "/api/exec/prepare" | "/api/exec/run" | "/api/exec/cancel") => {
+        ("POST", "/api/exec/policy" | "/api/exec/prepare" | "/api/exec/run" | "/api/exec/cancel" | "/api/actions/prepare" | "/api/actions/run" | "/api/actions/cancel" | "/api/actions/mcp/close") => {
             let (status, body) = web_supervision::handle(path, &request, &stream);
             (status, "application/json; charset=utf-8", serde_json::to_vec(&body).unwrap_or_default())
         }

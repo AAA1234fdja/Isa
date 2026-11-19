@@ -207,6 +207,31 @@ where C: FnMut(&str) -> Result<bool>, M: FnMut(&str) -> Result<String>, T: FnMut
     Err("MCP tool loop ended without a final answer".into())
 }
 
+/// A single live, bounded MCP session for the web supervisor. Discovery and
+/// calling must be authorized by the caller before invoking these methods.
+pub(crate) struct WebMcpSession { client: Client, tools: Vec<Value> }
+impl WebMcpSession {
+    pub(crate) fn start(root: &Path, command: &[String]) -> Result<Self> {
+        validate_args(command)?;
+        let mut client=Client::start(root,command)?; client.initialize()?;
+        let (tools,truncated)=client.tools()?;
+        if truncated { return Err("MCP discovery incomplete".into()); }
+        let mut seen=HashSet::new();
+        for tool in &tools {
+            let name=tool.get("name").and_then(Value::as_str).ok_or("invalid MCP name")?;
+            if name.chars().any(|c| c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) || !seen.insert(name) { return Err("invalid or duplicate MCP tool name".into()); }
+        }
+        Ok(Self {client,tools})
+    }
+    pub(crate) fn tools(&self) -> &[Value] { &self.tools }
+    pub(crate) fn call(&mut self, name: &str, arguments: Value) -> Result<Value> {
+        if self.tools.iter().filter(|t| t.get("name").and_then(Value::as_str)==Some(name)).count()!=1 { return Err("tool not uniquely discovered".into()); }
+        let result=self.client.request("tools/call",json!({"name":name,"arguments":arguments}))?;
+        if !result.get("content").is_some_and(Value::is_array) || result.get("isError").is_some_and(|v| !v.is_boolean()) { return Err("invalid MCP result; tool may already have run".into()); }
+        Ok(result)
+    }
+}
+
 #[cfg(not(unix))]
 struct Client;
 #[cfg(not(unix))]
@@ -224,7 +249,7 @@ impl Client {
     fn start(root: &Path, command: &[String]) -> Result<Self> {
         use std::os::{fd::AsRawFd, unix::process::CommandExt};
         use std::process::{Command, Stdio};
-        let mut child = Command::new(&command[0]).args(&command[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn()?;
+        let mut child = Command::new(&command[0]).args(&command[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").env_remove("ISA_WEB_MCP_COMMAND").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn()?;
         let input = child.stdin.take().expect("piped stdin");
         let output = child.stdout.take().expect("piped stdout");
         let client = Self { child, input, output, buffer: Vec::new(), received: 0, next_id: 1 };
