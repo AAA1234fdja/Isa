@@ -3,7 +3,7 @@
 use crate::{cli, http};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::net::TcpStream;
 use std::sync::{Mutex, OnceLock};
@@ -35,17 +35,26 @@ impl Action {
         }
     }
 }
-struct Pending { chat: String, action: Action, root: std::path::PathBuf, version: u64, expires: Instant, requires_approval: bool, server: Option<Vec<String>> }
-struct McpSession { chat: String, root: std::path::PathBuf, version: u64, expires: Instant, server: Vec<String>, client: cli::WebMcpSession }
+#[derive(Clone)]
+struct PoolScope { run: String, agent: String }
+struct PoolRun { chat: String, root: std::path::PathBuf, version: u64, expires: Instant, agents: HashSet<String>, starts: u8, calls: u8, busy: bool }
+struct Pending { pool: Option<PoolScope>, chat: String, action: Action, root: std::path::PathBuf, version: u64, expires: Instant, requires_approval: bool, server: Option<Vec<String>> }
+struct McpSession { pool_run: Option<String>, chat: String, root: std::path::PathBuf, version: u64, expires: Instant, server: Vec<String>, client: cli::WebMcpSession }
 #[derive(Default)]
-struct State { policies: HashMap<String, (Mode, u64)>, pending: HashMap<String, Pending>, sessions: HashMap<String, McpSession>, next_version: u64 }
+struct State { policies: HashMap<String, (Mode, u64)>, pending: HashMap<String, Pending>, sessions: HashMap<String, McpSession>, pool_runs: HashMap<String, PoolRun>, next_version: u64 }
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
 static RUNNING: AtomicUsize = AtomicUsize::new(0);
 fn state() -> &'static Mutex<State> {
     static JANITOR: OnceLock<()> = OnceLock::new();
     let state=STATE.get_or_init(|| Mutex::new(State::default()));
-    JANITOR.get_or_init(|| { std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(5)); if let Ok(mut s)=state.lock() { let now=Instant::now(); s.pending.retain(|_, p| p.expires>now); s.sessions.retain(|_, v| v.expires>now); } }); });
+    JANITOR.get_or_init(|| { std::thread::spawn(move || loop { std::thread::sleep(Duration::from_secs(5)); if let Ok(mut s)=state.lock() { expire(&mut s,Instant::now()); } }); });
     state
+}
+fn expire(s: &mut State, now: Instant) {
+    s.pool_runs.retain(|_, r| r.expires>now);
+    let State { pool_runs, pending, sessions, .. }=s;
+    pending.retain(|_, p| p.expires>now && p.pool.as_ref().map_or(true, |scope| pool_runs.contains_key(&scope.run)));
+    sessions.retain(|_, v| v.expires>now && v.pool_run.as_ref().map_or(true, |id| pool_runs.contains_key(id)));
 }
 fn hex_id(s: &str) -> bool { s.len()==48 && s.bytes().all(|b| b.is_ascii_hexdigit()) }
 fn safe_text(s: &str) -> bool { !s.chars().any(|c| c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) }
@@ -83,7 +92,11 @@ struct Policy { chat: String, mode: Mode }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
 struct Prepare { chat: String, command: String }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
-struct PrepareAction { chat: String, action: Action }
+struct PrepareAction { chat: String, action: Action, #[serde(default, rename="poolRun")] pool_run: Option<String>, #[serde(default)] agent: Option<String> }
+#[derive(Deserialize)] #[serde(deny_unknown_fields)]
+struct NewPoolRun { chat: String, agents: Vec<String> }
+#[derive(Deserialize)] #[serde(deny_unknown_fields)]
+struct ClosePoolRun { chat: String, run: String }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
 struct Cancel { chat: String, id: String }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
@@ -91,6 +104,20 @@ struct Execute { chat: String, id: String, approved: bool }
 #[derive(Deserialize)] #[serde(deny_unknown_fields)]
 struct CloseMcp { chat: String, session: String }
 fn err(status: &'static str, message: &'static str) -> (&'static str, Value) { (status, json!({"error":message})) }
+
+fn reserve_pool_action(run: &mut PoolRun, action: &Action) -> Result<(), (&'static str, &'static str)> {
+    if run.busy { return Err(("409 Conflict", "Another pool action is running; action was consumed.")); }
+    match action {
+        Action::McpStart {} if run.starts<3 => run.starts+=1,
+        Action::McpCall { .. } if run.calls<3 => run.calls+=1,
+        _ => return Err(("429 Too Many Requests", "Pool action budget exhausted or invalid.")),
+    }
+    run.busy=true; Ok(())
+}
+// Pool actions use a shared server-side serial gate and consume budget before
+// execution. It is intentionally independent of provider retry logic.
+struct PoolGuard(String);
+impl Drop for PoolGuard { fn drop(&mut self) { if let Ok(mut s)=state().lock() { if let Some(run)=s.pool_runs.get_mut(&self.0) { run.busy=false; } } } }
 
 // Consume before validation and dispatch, so approval IDs cannot be replayed,
 // including after denial, expiration, cross-chat access or a wrong endpoint.
@@ -115,17 +142,41 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
             if !s.policies.contains_key(&body.chat) && s.policies.len() >= 1000 { return err("503 Service Unavailable", "Policy limit reached."); }
             if s.policies.get(&body.chat).map(|p| p.0) != Some(body.mode) {
                 s.next_version = s.next_version.saturating_add(1); let version = s.next_version;
-                s.policies.insert(body.chat.clone(), (body.mode,version)); s.pending.retain(|_, p| p.chat != body.chat); s.sessions.retain(|_, v| v.chat != body.chat);
+                s.policies.insert(body.chat.clone(), (body.mode,version)); s.pending.retain(|_, p| p.chat != body.chat); s.sessions.retain(|_, v| v.chat != body.chat); s.pool_runs.retain(|_, r| r.chat != body.chat);
             }
             ("200 OK", json!({"mode":body_mode(body.mode),"workspace":root.display().to_string()}))
         }
+        "/api/actions/pool/start" => {
+            let Ok(body)=serde_json::from_slice::<NewPoolRun>(&request.body) else { return err("400 Bad Request", "Invalid pool run."); };
+            if !id_valid(&body.chat) || body.agents.is_empty() || body.agents.len()>50 || body.agents.iter().any(|a| !id_valid(a)) { return err("400 Bad Request", "Invalid pool agents."); }
+            let agents:HashSet<_>=body.agents.into_iter().collect();
+            let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); };
+            let Some(&(_,version))=s.policies.get(&body.chat) else { return err("409 Conflict", "Chat policy is not registered."); };
+            expire(&mut s,Instant::now());
+            if s.pool_runs.len()>=32 { return err("503 Service Unavailable", "Pool run limit reached."); }
+            let Ok(id)=random_id() else { return err("503 Service Unavailable", "Secure random source unavailable."); };
+            s.pool_runs.insert(id.clone(),PoolRun { chat:body.chat,root:root.clone(),version,expires:Instant::now()+Duration::from_secs(300),agents,starts:0,calls:0,busy:false });
+            ("200 OK",json!({"run":id,"maxStarts":3,"maxCalls":3,"expiresInSeconds":300}))
+        }
+        "/api/actions/pool/close" => {
+            let Ok(body)=serde_json::from_slice::<ClosePoolRun>(&request.body) else { return err("400 Bad Request", "Invalid pool run."); };
+            if !id_valid(&body.chat) || !hex_id(&body.run) { return err("400 Bad Request", "Invalid pool run."); }
+            let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); };
+            if s.pool_runs.get(&body.run).is_some_and(|r|r.chat==body.chat) {
+                s.pool_runs.remove(&body.run);
+                s.pending.retain(|_,p|p.pool.as_ref().map(|x|x.run.as_str())!=Some(body.run.as_str()));
+                s.sessions.retain(|_,v|v.pool_run.as_deref()!=Some(body.run.as_str()));
+            }
+            ("200 OK",json!({"closed":true}))
+        }
         "/api/exec/prepare" | "/api/actions/prepare" => {
-            let (chat, action, legacy) = if path == "/api/exec/prepare" {
+            let (chat, action, pool, legacy) = if path == "/api/exec/prepare" {
                 let Ok(body) = serde_json::from_slice::<Prepare>(&request.body) else { return err("400 Bad Request", "Invalid action."); };
-                (body.chat, Action::Shell { command: body.command }, true)
+                (body.chat, Action::Shell { command: body.command }, None, true)
             } else {
                 let Ok(body) = serde_json::from_slice::<PrepareAction>(&request.body) else { return err("400 Bad Request", "Invalid or unsupported action."); };
-                (body.chat, body.action, false)
+                let pool=match (body.pool_run,body.agent) { (None,None)=>None, (Some(run),Some(agent)) if hex_id(&run) && id_valid(&agent)=>Some(PoolScope {run,agent}), _=>return err("400 Bad Request", "Invalid pool action attribution.") };
+                (body.chat, body.action, pool, false)
             };
             if !id_valid(&chat) || !action.valid() { return err("400 Bad Request", "Invalid chat ID or action."); }
             let Ok(mut s) = state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); };
@@ -133,11 +184,16 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
             let Some(&(mode, version)) = s.policies.get(&chat) else { return err("409 Conflict", "Chat policy is not registered."); };
             if s.pending.len() >= 64 { return err("503 Service Unavailable", "Pending approval limit reached."); }
             let Ok(id) = random_id() else { return err("503 Service Unavailable", "Secure random source unavailable."); };
+            if let Some(scope)=&pool {
+                if !matches!(&action,Action::McpStart {} | Action::McpCall { .. }) { return err("400 Bad Request", "Unsupported pool action."); }
+                let Some(run)=s.pool_runs.get(&scope.run) else { return err("409 Conflict", "Pool run unavailable or expired."); };
+                if run.chat!=chat || run.root!=root || run.version!=version || run.expires<=Instant::now() || !run.agents.contains(&scope.agent) { return err("403 Forbidden", "Pool run or agent is invalid."); }
+            }
             let server=match &action {
                 Action::McpStart {} => { let Some(command)=mcp_command() else { return err("503 Service Unavailable", "MCP server is not configured."); }; Some(command) },
                 Action::McpCall { session, name, .. } => {
                     let Some(v)=s.sessions.get(session) else { return err("409 Conflict", "MCP session is unavailable or expired."); };
-                    if v.chat!=chat || v.root!=root || v.version!=version || v.expires<=Instant::now() || mcp_command().as_ref()!=Some(&v.server) || v.client.tools().iter().filter(|t| t.get("name").and_then(Value::as_str)==Some(name.as_str())).count()!=1 { return err("403 Forbidden", "MCP session or tool is invalid."); }
+                    if v.pool_run.as_deref()!=pool.as_ref().map(|p|p.run.as_str()) || v.chat!=chat || v.root!=root || v.version!=version || v.expires<=Instant::now() || mcp_command().as_ref()!=Some(&v.server) || v.client.tools().iter().filter(|t| t.get("name").and_then(Value::as_str)==Some(name.as_str())).count()!=1 { return err("403 Forbidden", "MCP session or tool is invalid."); }
                     Some(v.server.clone())
                 }, _=>None,
             };
@@ -146,7 +202,8 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
             if legacy { if let Action::Shell { command } = &action { response["command"] = json!(command); } }
             else { response["action"] = json!(&action); }
             if let Some(command)=&server { response["serverCommand"]=json!(command); }
-            s.pending.insert(id, Pending { chat, action, root:root.clone(),version,expires:Instant::now()+Duration::from_secs(120),requires_approval,server });
+            if let Some(scope)=&pool { response["poolRun"]=json!(scope.run); response["agent"]=json!(scope.agent); }
+            s.pending.insert(id, Pending { pool, chat, action, root:root.clone(),version,expires:Instant::now()+Duration::from_secs(120),requires_approval,server });
             ("200 OK", response)
         }
         "/api/exec/cancel" | "/api/actions/cancel" => {
@@ -175,6 +232,13 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
             };
             if RUNNING.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < 2).then_some(n+1)).is_err() { return err("503 Service Unavailable", "Execution capacity reached; action was consumed."); }
             struct Guard; impl Drop for Guard { fn drop(&mut self) { RUNNING.fetch_sub(1, Ordering::SeqCst); } } let _guard=Guard;
+            let _pool_guard=if let Some(scope)=&pending.pool {
+                let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); };
+                let Some(run)=s.pool_runs.get_mut(&scope.run) else { return err("409 Conflict", "Pool run unavailable or expired."); };
+                if run.chat!=body.chat || run.root!=root || run.version!=pending.version || run.expires<=Instant::now() || !run.agents.contains(&scope.agent) { return err("403 Forbidden", "Pool run or agent is invalid."); }
+                if let Err((status,message))=reserve_pool_action(run,&pending.action) { return err(status,message); }
+                Some(PoolGuard(scope.run.clone()))
+            } else { None };
             match pending.action {
                 Action::McpStart {} => {
                     let Some(server)=pending.server else { return err("403 Forbidden", "MCP server configuration missing."); };
@@ -184,16 +248,16 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
                     let Ok(session)=random_id() else { return err("503 Service Unavailable", "Secure random source unavailable; server actions may have occurred."); };
                     let tools=client.tools().to_vec();
                     let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable; server actions may have occurred."); };
-                    if s.policies.get(&body.chat).map(|v|v.1)!=Some(pending.version) || mcp_command().as_ref()!=Some(&server) || self::root()!=Some(root.clone()) { return err("403 Forbidden", "Policy or configuration changed; server actions may have occurred."); }
+                    if pending.pool.as_ref().is_some_and(|p| !s.pool_runs.contains_key(&p.run)) || s.policies.get(&body.chat).map(|v|v.1)!=Some(pending.version) || mcp_command().as_ref()!=Some(&server) || self::root()!=Some(root.clone()) { return err("403 Forbidden", "Policy or configuration changed; server actions may have occurred."); }
                     s.sessions.retain(|_,v|v.expires>Instant::now()); if s.sessions.len()>=4 { return err("503 Service Unavailable", "MCP session limit reached; server actions may have occurred."); }
-                    s.sessions.insert(session.clone(),McpSession { chat:body.chat,root,version:pending.version,expires:Instant::now()+Duration::from_secs(300),server,client });
+                    s.sessions.insert(session.clone(),McpSession { pool_run:pending.pool.as_ref().map(|p|p.run.clone()), chat:body.chat,root,version:pending.version,expires:Instant::now()+Duration::from_secs(300),server,client });
                     ("200 OK",json!({"result":{"session":session,"tools":tools,"expiresInSeconds":300}}))
                 }
                 Action::McpCall { session,name,arguments } => {
                     let mut session = {
                         let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); };
                         let Some(v)=s.sessions.remove(&session) else { return err("409 Conflict", "MCP session unavailable or already used."); };
-                        if v.chat!=body.chat || v.root!=root || v.version!=pending.version || s.policies.get(&body.chat).map(|v|v.1)!=Some(v.version) || v.expires<=Instant::now() || pending.server.as_ref()!=Some(&v.server) || mcp_command().as_ref()!=Some(&v.server) { return err("403 Forbidden", "MCP session expired or policy changed."); } v
+                        if v.pool_run.as_deref()!=pending.pool.as_ref().map(|p|p.run.as_str()) || v.chat!=body.chat || v.root!=root || v.version!=pending.version || s.policies.get(&body.chat).map(|v|v.1)!=Some(v.version) || v.expires<=Instant::now() || pending.server.as_ref()!=Some(&v.server) || mcp_command().as_ref()!=Some(&v.server) { return err("403 Forbidden", "MCP session expired or policy changed."); } v
                     };
                     match session.client.call(&name,arguments) { Ok(result)=>("200 OK",json!({"result":result})), Err(_)=>err("500 Internal Server Error", "MCP call failed; its outcome may be unknown. Do not blindly retry.") }
                 }
@@ -209,7 +273,7 @@ fn body_mode(mode: Mode) -> &'static str { match mode { Mode::Always => "always"
 mod tests {
     use super::*;
     fn pending(expires: Instant) -> Pending {
-        Pending { chat:"a".into(), action:Action::WorkspaceInfo {}, root:"/workspace".into(), version:7, expires, requires_approval:true, server:None }
+        Pending { pool:None, chat:"a".into(), action:Action::WorkspaceInfo {}, root:"/workspace".into(), version:7, expires, requires_approval:true, server:None }
     }
     #[test]
     fn expired_and_changed_actions_are_consumed_without_running() {
@@ -228,6 +292,15 @@ mod tests {
         let state=std::sync::Arc::new(Mutex::new(s)); let barrier=std::sync::Arc::new(std::sync::Barrier::new(2));
         let threads:Vec<_>=(0..2).map(|_| { let state=state.clone();let barrier=barrier.clone();std::thread::spawn(move || { barrier.wait();let mut s=state.lock().unwrap();consume(&mut s,"a","one",std::path::Path::new("/workspace"),true,false,now).is_ok() }) }).collect();
         assert_eq!(threads.into_iter().map(|t| t.join().unwrap()).filter(|ok| *ok).count(),1);
+    }
+    #[test]
+    fn pool_gate_serializes_and_counts_attempts_across_agents() {
+        let mut run=PoolRun { chat:"a".into(),root:"/workspace".into(),version:7,expires:Instant::now()+Duration::from_secs(60),agents:["one".into(),"two".into()].into_iter().collect(),starts:0,calls:0,busy:false };
+        let start=Action::McpStart {}; let call=Action::McpCall { session:"a".repeat(48),name:"echo".into(),arguments:json!({}) };
+        assert!(reserve_pool_action(&mut run,&start).is_ok());
+        assert_eq!(reserve_pool_action(&mut run,&call).unwrap_err().0,"409 Conflict"); assert_eq!(run.calls,0);
+        run.busy=false; for _ in 0..3 { assert!(reserve_pool_action(&mut run,&call).is_ok()); run.busy=false; }
+        assert_eq!(reserve_pool_action(&mut run,&call).unwrap_err().0,"429 Too Many Requests"); assert_eq!(run.calls,3);
     }
     #[test]
     fn action_schema_and_risk_are_backend_defined() {

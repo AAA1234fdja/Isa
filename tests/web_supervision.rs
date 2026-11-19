@@ -107,3 +107,25 @@ fn mcp_rejects_unknown_tools_and_invalidates_sessions_on_policy_change() {
     let (_,p)=s.req("/api/actions/prepare",json!({"chat":"a","action":{"type":"mcp_call","session":session,"name":"echo","arguments":{}}}));assert_eq!(p["requiresApproval"],true);
     s.req("/api/exec/policy",json!({"chat":"a","mode":"free"}));assert_eq!(s.req("/api/actions/run",json!({"chat":"a","id":p["id"],"approved":true})).0,409);assert!(!s.root.join("marker").exists());
 }
+
+#[test]
+fn pool_action_budgets_are_shared_and_bound_to_agents_sessions_and_chat() {
+    let s=Server::configured(true,true);
+    assert_eq!(s.req("/api/exec/policy",json!({"chat":"pool-chat","mode":"risk"})).0,200);
+    let (code,r)=s.req("/api/actions/pool/start",json!({"chat":"pool-chat","agents":["agent-a","agent-b"]}));assert_eq!(code,200);let run=r["run"].as_str().unwrap();assert_eq!(r["maxCalls"],3);
+    let p=|agent:&str, action:Value| s.req("/api/actions/prepare",json!({"chat":"pool-chat","poolRun":run,"agent":agent,"action":action}));
+    assert_eq!(p("other",json!({"type":"mcp_start"})).0,403);
+    assert_eq!(p("agent-a",json!({"type":"workspace_info"})).0,400);
+    for i in 0..3 {
+        let agent=if i%2==0 {"agent-a"} else {"agent-b"};
+        let (code,pending)=p(agent,json!({"type":"mcp_start"}));assert_eq!(code,200);assert_eq!(pending["requiresApproval"],true);assert_eq!(pending["agent"],agent);
+        let (code,result)=s.req("/api/actions/run",json!({"chat":"pool-chat","id":pending["id"],"approved":true}));assert_eq!(code,200);let session=result["result"]["session"].as_str().unwrap();
+        let call=json!({"type":"mcp_call","session":session,"name":"echo","arguments":{"i":i}});
+        assert_eq!(s.req("/api/actions/prepare",json!({"chat":"pool-chat","action":call})).0,403);
+        let (code,pending)=p(agent,call);assert_eq!(code,200);assert_eq!(pending["requiresApproval"],true);
+        let (code,_)=s.req("/api/actions/run",json!({"chat":"pool-chat","id":pending["id"],"approved":true}));assert_eq!(code,200);
+    }
+    let (_,pending)=p("agent-b",json!({"type":"mcp_start"}));assert_eq!(s.req("/api/actions/run",json!({"chat":"pool-chat","id":pending["id"],"approved":true})).0,429);
+    assert_eq!(s.req("/api/actions/pool/close",json!({"chat":"pool-chat","run":run})).0,200);
+    assert_eq!(p("agent-a",json!({"type":"mcp_start"})).0,409);
+}

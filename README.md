@@ -519,3 +519,22 @@ clients. This flow does not report model usage in the chat heatmap.
 ### Read-only web proposal review
 
 Assistant messages containing `<<<<<<< SEARCH` offer **Review proposal**. Paste or edit one complete `File: …` SEARCH/REPLACE block in the dialog and select **Check proposal**. The Rust server checks the existing UTF-8 file in `ISA_WEB_AGENT_WORKSPACE`, validates the same format and exact unique match used by the CLI, and displays the submitted search and replacement literally. No file or undo record is written; this does not apply a patch. A successful check is a snapshot, not a guarantee that the file remains unchanged. If the search has no exact match, the review, `check-edit`, and CLI replacement operations can report up to five approximate line ranges found by collapsing whitespace (files up to 64 KiB). These are hints only, may be partial or misleading, and contain no source excerpts; inspect the file and correct the proposal manually. They never relax the exact-match rule. If SEARCH matches more than once, including overlapping matches, ISA reports up to five exact-match line ranges for files up to 64 KiB; add context to make the search unique. It never chooses a match automatically. A single complete block surrounded by explanations or Markdown fences is extracted for review. When several unambiguous blocks are detected, choose and load one explicitly; only that block is checked, not the combined changes. Loading replaces any text already in the editor. Ambiguous or incomplete blocks must be edited manually. The review can optionally reveal spaces, tabs and line breaks. After a successful check, **Download proposal** saves the checked text to the browser device as `isa-proposal.txt`; it may contain sensitive content. Transfer it to the CLI host if necessary and run `check-edit` or `apply-edit` there, with the correct workspace. Downloading does not authorize or apply anything, and later checks may fail if the file changed. The browser folder picker does not configure the server workspace. The Node development preview does not implement this endpoint. Path exclusions and symlink checks are not a sandbox or race-free security boundary; use a trusted workspace and server, and do not expose it to untrusted clients.
+
+### Pool MCP supervisor groundwork
+
+The local supervisor provides an internal, opt-in pool-run scope for future MCP
+orchestration. It binds a run to a chat, workspace, policy version and a set of
+agent identifiers, and enforces at most three server starts and three calls per
+run, serially, with one-use approvals and no automatic retries. Sessions created
+under a pool scope cannot be used as unscoped manual sessions. Expiration,
+closing the run or changing policy invalidates pending actions and sessions;
+in-flight processes can still have effects. The run and agent identifiers are
+supplied by the authenticated capability holder, not verified identities, and
+that holder can use the independent manual API; this is not a security boundary
+against a compromised browser or same-user process.
+
+**This is backend groundwork only.** Agent Pools cannot yet create these scopes,
+propose or run MCP actions, or request consent to share metadata and results.
+No provider receives MCP results through this groundwork. Pool integration still
+requires explicit opt-in, per-action and per-recipient consent, attribution,
+shared cancellation handling and end-to-end tests before it can be enabled.
