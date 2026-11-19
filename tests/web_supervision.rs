@@ -22,7 +22,7 @@ impl Server {
         if enabled { command.env("ISA_WEB_EXEC_TOKEN",TOKEN).env("ISA_WEB_EXEC_WORKSPACE",&root); }
         command.env_remove("ISA_WEB_MCP_COMMAND").env_remove("ISA_WEB_EXEC_PROFILE").env("ISA_TEST_SECRET","should-not-inherit");
         if let Some(profile)=profile { command.env("ISA_WEB_EXEC_PROFILE",profile); }
-        if mcp { let fixture=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp-server.cjs"); let marker=root.join("marker"); command.env("ISA_WEB_MCP_COMMAND",json!(["node",fixture.to_string_lossy(),"valid",marker.to_string_lossy()]).to_string()); }
+        if mcp { let fixture=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp-server.cjs"); let marker=root.join("marker"); let output=Command::new("node").args(["-p","process.execPath"]).output().unwrap(); assert!(output.status.success()); let node=String::from_utf8(output.stdout).unwrap(); command.env("ISA_WEB_MCP_COMMAND",json!([node.trim(),fixture.to_string_lossy(),"valid",marker.to_string_lossy()]).to_string()); }
         let child=command.spawn().unwrap(); let mut server=Self { child,address,root };
         for _ in 0..200 { if server.child.try_wait().unwrap().is_some() { panic!("server exited"); } if TcpStream::connect(&server.address).is_ok() { return server; } std::thread::sleep(Duration::from_millis(25)); } panic!("server failed to start");
     }
