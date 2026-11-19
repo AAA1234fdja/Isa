@@ -1,5 +1,6 @@
-use super::{session, symbols, Result};
+use super::{edit_path_guard, session, symbols, Result};
 use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -20,12 +21,13 @@ fn safe_path(root: &Path, relative: &Path) -> Result<PathBuf> {
         };
         let name_text = name.to_string_lossy();
         if name_text.chars().any(|ch| ch.is_control() || unsafe_for_review(ch)) { return Err("path cannot contain control characters".into()); }
-        if name_text == ".git" || name_text == ".isa" || name_text == ".env" || name_text.starts_with(".env.") || name_text == ".git-credentials" || name_text == ".netrc" || matches!(name_text.as_ref(), ".ssh" | ".aws" | ".gnupg" | ".kube" | "id_rsa" | "id_ed25519") {
-            return Err("protected paths cannot be edited".into());
+        if cfg!(windows) && name.to_str().is_none() { return Err("non-Unicode Windows paths are not supported".into()); }
+        if edit_path_guard::rejected_name(&name_text) {
+            return Err("protected or ambiguous paths cannot be edited".into());
         }
         path.push(name);
         let metadata = fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() { return Err("symlink paths are not supported".into()); }
+        if edit_path_guard::is_link_or_reparse(&metadata) { return Err("symlink or reparse-point paths are not supported".into()); }
     }
     let metadata = fs::metadata(&path)?;
     if !metadata.is_file() || metadata.len() > LIMIT { return Err("target must be a regular file smaller than 1 MiB".into()); }
@@ -48,7 +50,7 @@ fn visible(text: &str) -> String {
 fn backup_dir(root: &Path) -> Result<PathBuf> {
     let dir = root.join(".isa");
     match fs::symlink_metadata(&dir) {
-        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => return Err(".isa must be a regular directory".into()),
+        Ok(meta) if edit_path_guard::is_link_or_reparse(&meta) || !meta.is_dir() => return Err(".isa must be a regular directory".into()),
         Ok(_) => (),
         Err(e) if e.kind() == io::ErrorKind::NotFound => fs::create_dir(&dir)?,
         Err(e) => return Err(e.into()),
@@ -71,6 +73,7 @@ fn atomic_write(path: &Path, data: &[u8], copy_permissions: bool) -> Result<()> 
         file.write_all(data)?;
         if copy_permissions { file.set_permissions(fs::metadata(path)?.permissions())?; }
         file.sync_all()?;
+        drop(file); // Close the temporary file before replacing the destination.
         fs::rename(&temp, path)?;
         Ok(())
     })();
@@ -248,6 +251,188 @@ pub fn preview_proposal(root: &Path, proposal: &str) -> std::result::Result<Valu
     if safe_path(root, Path::new(file)).map_err(|_| "Target changed during review.")? != target { return Err("Target changed during review.".into()); }
     let syntax = symbols::compare_syntax(Path::new(file), &before, &after);
     Ok(json!({"file":file,"search":old,"replacement":new,"line":line,"beforeBytes":before.len(),"afterBytes":after.len(),"readOnly":true,"syntax":syntax}))
+}
+
+// The web supervisor binds an approval to an exact file snapshot. This is a
+// single-file operation, not a multi-file transaction or a filesystem sandbox.
+fn snapshot_hash(text: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(text.as_bytes()).iter().map(|b| format!("{b:02x}")).collect()
+}
+pub(super) fn web_prepare_apply(root: &Path, proposal: &str) -> Result<(Value, String)> {
+    if proposal.len()>7000 { return Err("proposal exceeds the web action limit".into()); }
+    let (file, old, new)=parse_proposal(proposal)?;
+    let relative=Path::new(file);let path=safe_path(root,relative)?;let identity=transaction_identity(&path)?;let before=read_target(&path)?;
+    let (after,line)=checked_replacement(&before,old,new)?;
+    if safe_path(root,relative)?!=path || transaction_identity(&path)?!=identity || read_target(&path)?!=before { return Err("file changed during preparation".into()); }
+    let review=json!({"file":file,"search":old,"replacement":new,"line":line,"beforeBytes":before.len(),"afterBytes":after.len(),"syntax":symbols::compare_syntax(relative,&before,&after)});
+    Ok((review,edit_snapshot(identity,&before)))
+}
+// Binding approval to both contents and file identity detects same-content
+// replacement while the approval is pending. It is not a race-free write.
+fn edit_snapshot(identity:(u64,u64), contents:&str)->String {
+    format!("{:016x}:{:016x}:{}",identity.0,identity.1,snapshot_hash(contents))
+}
+// Serialize the check-and-write among web edits in this process. This does not
+// exclude shell commands, other processes, or hostile filesystem mutations.
+static WEB_EDIT_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+// Transactions reject hard-linked targets entirely. This is deliberately stricter
+// than rejecting just aliases within the batch; external aliases would otherwise
+// acquire surprising semantics when a pathname is replaced by rename.
+#[cfg(unix)]
+fn transaction_path(root: &Path, relative: &Path) -> Result<PathBuf> {
+    use std::os::unix::fs::MetadataExt;
+    let path=safe_path(root, relative)?;
+    if fs::metadata(&path)?.nlink()!=1 { return Err("hard-linked transaction target is not supported".into()); }
+    Ok(path)
+}
+#[cfg(unix)]
+fn transaction_identity(path: &Path) -> Result<(u64,u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata=fs::metadata(path)?;Ok((metadata.dev(),metadata.ino()))
+}
+#[cfg(windows)]
+fn transaction_identity(path: &Path) -> Result<(u64,u64)> { Ok(super::windows_file_identity::single_link_identity(path)?) }
+#[cfg(windows)]
+fn transaction_path(root: &Path, relative: &Path) -> Result<PathBuf> {
+    let path=safe_path(root,relative)?;
+    super::windows_file_identity::single_link_identity(&path)?;
+    Ok(path)
+}
+#[cfg(not(any(unix,windows)))]
+fn transaction_identity(_path: &Path) -> Result<(u64,u64)> { Err("transactions require supported file identity checks".into()) }
+#[cfg(not(any(unix,windows)))]
+fn transaction_path(_root: &Path, _relative: &Path) -> Result<PathBuf> { Err("transactions require supported file identity checks".into()) }
+
+pub(super) fn web_prepare_transaction(root: &Path, proposals: &[String]) -> Result<(Value, Vec<String>)> {
+    use std::collections::HashSet;
+    if proposals.is_empty() || proposals.len()>12 || proposals.iter().map(|p|p.len()).sum::<usize>()>7000 { return Err("invalid transaction size".into()); }
+    let mut paths=HashSet::new();let mut identities=HashSet::new();let mut reviews=Vec::new();let mut snapshots=Vec::new();let mut total=0usize;
+    for proposal in proposals {
+        let (file,_,_)=parse_proposal(proposal)?;
+        let path=transaction_path(root,Path::new(file))?;
+        if !paths.insert(path.clone()) || !identities.insert(transaction_identity(&path)?) { return Err("duplicate or aliased transaction target".into()); }
+        let (review,snapshot)=web_prepare_apply(root,proposal)?;
+        let before=read_target(&path)?;total=total.checked_add(before.len()).ok_or("transaction too large")?;
+        if total>1024*1024 || edit_snapshot(transaction_identity(&path)?,&before)!=snapshot || transaction_path(root,Path::new(file))? != path { return Err("transaction is too large or target changed".into()); }
+        reviews.push(review);snapshots.push(snapshot);
+    }
+    Ok((json!({"files":reviews,"atomic":false,"undoAvailable":true}),snapshots))
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct WebTransactionUndo { files: Vec<TransactionUndoFile> }
+#[derive(Clone, Serialize, Deserialize)]
+struct TransactionUndoFile { relative: PathBuf, before: String, after_hash: String, proposal: String }
+pub(super) fn web_apply_transaction<F: FnOnce(&WebTransactionUndo) -> Result<()>>(root: &Path, proposals: &[String], snapshots: &[String], persist: F) -> super::edit_transaction::Outcome {
+    use super::edit_transaction::{Change, Outcome};
+    use std::collections::{HashMap, HashSet};
+    let build = || -> Result<(Vec<Change>, HashMap<PathBuf, PathBuf>)> {
+        if proposals.is_empty() || proposals.len()>12 || proposals.len()!=snapshots.len() || proposals.iter().map(|p|p.len()).sum::<usize>()>7000 { return Err("invalid transaction".into()); }
+        let mut seen=HashSet::new();let mut identities=HashSet::new();let mut changes=Vec::new();let mut relatives=HashMap::new();let mut total=0usize;
+        for (proposal,snapshot) in proposals.iter().zip(snapshots) {
+            let (file,old,new)=parse_proposal(proposal)?;let relative=PathBuf::from(file);
+            let path=transaction_path(root,&relative)?;
+            if !seen.insert(path.clone()) || !identities.insert(transaction_identity(&path)?) { return Err("duplicate or aliased transaction target".into()); }
+            let before=read_target(&path)?;total=total.checked_add(before.len()).ok_or("transaction too large")?;if total>1024*1024 || edit_snapshot(transaction_identity(&path)?,&before)!=*snapshot { return Err("file changed since preparation".into()); }
+            let (after,_)=checked_replacement(&before,old,new)?;
+            if transaction_path(root,&relative)?!=path || read_target(&path)?!=before { return Err("target changed during transaction preparation".into()); }
+            relatives.insert(path.clone(),relative);changes.push(Change {path,before:before.into_bytes(),after:after.into_bytes()});
+        }
+        Ok((changes,relatives))
+    };
+    let Ok(_guard)=WEB_EDIT_WRITE.lock() else { return Outcome::NotStarted; };
+    let Ok((changes,relatives))=build() else { return Outcome::NotStarted; };
+    let files=changes.iter().zip(proposals).map(|(change,proposal)| TransactionUndoFile {
+        relative:relatives[&change.path].clone(), before:String::from_utf8(change.before.clone()).expect("read_target checked UTF-8"),
+        after_hash:snapshot_hash(std::str::from_utf8(&change.after).expect("replacement checked UTF-8")),proposal:proposal.clone()
+    }).collect();
+    let undo=WebTransactionUndo {files};
+    // Detect replacement with identical contents while durable undo is saved.
+    // This narrows, but cannot eliminate, external filesystem races.
+    let identities:Result<Vec<_>>=changes.iter().map(|change|transaction_identity(&change.path)).collect();
+    let Ok(identities)=identities else {return Outcome::NotStarted;};
+    if persist(&undo).is_err() { return Outcome::NotStarted; }
+    if changes.iter().zip(identities).any(|(change,id)|transaction_identity(&change.path).map_or(true,|current|current!=id)) {return Outcome::NotStarted;}
+    super::edit_transaction::commit(&changes,|path| relatives.get(path).is_some_and(|relative|transaction_path(root,relative).is_ok_and(|checked|checked==path)))
+}
+
+pub(super) fn web_prepare_transaction_undo(root: &Path, undo: &WebTransactionUndo) -> Result<(Value,Vec<String>)> {
+    use std::collections::HashSet;
+    let mut paths=HashSet::new();let mut ids=HashSet::new();let mut reviews=Vec::new();let mut snapshots=Vec::new();let mut restored=0usize;
+    for item in &undo.files {
+        let path=transaction_path(root,&item.relative)?;
+        let identity=transaction_identity(&path)?;
+        if !paths.insert(path.clone()) || !ids.insert(identity) { return Err("aliased transaction undo target".into()); }
+        let current=read_target(&path)?;
+        if current==item.before { restored+=1; } else if snapshot_hash(&current)!=item.after_hash { return Err("transaction target changed".into()); }
+        if transaction_path(root,&item.relative)?!=path || transaction_identity(&path)?!=identity || read_target(&path)?!=current { return Err("transaction target changed".into()); }
+        snapshots.push(edit_snapshot(identity,&current));
+        let (file,old,new)=parse_proposal(&item.proposal)?;
+        reviews.push(json!({"file":file,"search":new,"replacement":old,"beforeBytes":current.len(),"afterBytes":item.before.len()}));
+    }
+    if restored!=0 && restored!=undo.files.len() { return Err("transaction targets have mixed states".into()); }
+    Ok((json!({"files":reviews,"atomic":false,"alreadyUndone":restored==undo.files.len()}),snapshots))
+}
+pub(super) fn web_apply_transaction_undo(root: &Path, undo: &WebTransactionUndo, snapshots:&[String]) -> (super::edit_transaction::Outcome, bool) {
+    use super::edit_transaction::{Change, Outcome};use std::collections::{HashMap,HashSet};
+    let Ok(_guard)=WEB_EDIT_WRITE.lock() else { return (Outcome::NotStarted,false); };
+    if undo.files.is_empty() || undo.files.len()!=snapshots.len() {return (Outcome::NotStarted,false);}
+    for (item,snapshot) in undo.files.iter().zip(snapshots) {
+        let valid=(|| -> Result<bool> {let path=transaction_path(root,&item.relative)?;let identity=transaction_identity(&path)?;let current=read_target(&path)?;Ok(edit_snapshot(identity,&current)==*snapshot && transaction_path(root,&item.relative)?==path && transaction_identity(&path)?==identity)})();
+        if !matches!(valid,Ok(true)) {return (Outcome::NotStarted,false);}
+    }
+    let build=|| -> Result<(Vec<Change>,HashMap<PathBuf,PathBuf>)> {
+        let mut changes=Vec::new();let mut relatives=HashMap::new();let mut paths=HashSet::new();let mut ids=HashSet::new();
+        for (item,snapshot) in undo.files.iter().zip(snapshots) {
+            let path=transaction_path(root,&item.relative)?;
+            if !paths.insert(path.clone()) || !ids.insert(transaction_identity(&path)?) { return Err("aliased undo target".into()); }
+            let current=read_target(&path)?;
+            if edit_snapshot(transaction_identity(&path)?,&current)!=*snapshot || snapshot_hash(&current)!=item.after_hash || transaction_path(root,&item.relative)?!=path || read_target(&path)?!=current { return Err("undo target changed".into()); }
+            relatives.insert(path.clone(),item.relative.clone());changes.push(Change {path,before:current.into_bytes(),after:item.before.as_bytes().to_vec()});
+        }
+        Ok((changes,relatives))
+    };
+    // Repeated undo is a no-op only if every original snapshot is still present.
+    if undo.files.iter().all(|item|transaction_path(root,&item.relative).ok().and_then(|p|read_target(&p).ok()).is_some_and(|s|s==item.before)) { return (Outcome::Applied,true); }
+    let Ok((changes,relatives))=build() else { return (Outcome::NotStarted,false); };
+    (super::edit_transaction::commit(&changes,|path|relatives.get(path).is_some_and(|relative|transaction_path(root,relative).is_ok_and(|checked|checked==path))),false)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct WebEditUndo { file: String, before: String, after_hash: String, proposal: String, line: usize }
+pub(super) fn web_apply_prepared_with<F: FnOnce(&WebEditUndo) -> Result<()>>(root: &Path, proposal: &str, snapshot: &str, persist: F) -> Result<Value> {
+    let _guard=WEB_EDIT_WRITE.lock().map_err(|_| "web edit lock unavailable")?;
+    let (file, old, new)=parse_proposal(proposal)?;let relative=Path::new(file);
+    let path=safe_path(root,relative)?;let identity=transaction_identity(&path)?;let before=read_target(&path)?;
+    if edit_snapshot(identity,&before)!=snapshot { return Err("file changed since preparation".into()); }
+    let (after,line)=checked_replacement(&before,old,new)?;
+    if safe_path(root,relative)?!=path || transaction_identity(&path)?!=identity || read_target(&path)?!=before { return Err("file changed before write".into()); }
+    let undo=WebEditUndo {file:file.to_owned(),before,after_hash:snapshot_hash(&after),proposal:proposal.to_owned(),line};
+    persist(&undo)?;
+    if safe_path(root,relative)?!=path || transaction_identity(&path)?!=identity || read_target(&path)?!=undo.before { return Err("file changed while saving undo".into()); }
+    atomic_write(&path,after.as_bytes(),true)?;
+    Ok(json!({"file":file,"line":line,"applied":true}))
+}
+#[cfg(test)]
+fn web_apply_prepared(root:&Path, proposal:&str, snapshot:&str)->Result<(Value,WebEditUndo)> {
+    let mut saved=None;let result=web_apply_prepared_with(root,proposal,snapshot,|u| {saved=Some(u.clone());Ok(())})?;Ok((result,saved.ok_or("undo missing")?))
+}
+pub(super) fn web_prepare_undo(root: &Path, undo: &WebEditUndo) -> Result<(Value,String)> {
+    let relative=Path::new(&undo.file); let path=safe_path(root,relative)?;let identity=transaction_identity(&path)?;let current=read_target(&path)?;
+    if current!=undo.before && snapshot_hash(&current)!=undo.after_hash { return Err("file changed since edit".into()); }
+    if safe_path(root,relative)?!=path || transaction_identity(&path)?!=identity || read_target(&path)?!=current { return Err("file changed during undo preparation".into()); }
+    let (_,old,new)=parse_proposal(&undo.proposal)?;
+    Ok((json!({"file":undo.file,"search":new,"replacement":old,"beforeBytes":current.len(),"afterBytes":undo.before.len(),"line":undo.line,"alreadyUndone":current==undo.before}),edit_snapshot(identity,&current)))
+}
+pub(super) fn web_apply_undo(root: &Path, undo: &WebEditUndo, snapshot:&str) -> Result<Value> {
+    let _guard=WEB_EDIT_WRITE.lock().map_err(|_| "web edit lock unavailable")?;
+    let relative=Path::new(&undo.file);let path=safe_path(root,relative)?;let identity=transaction_identity(&path)?;let current=read_target(&path)?;
+    if edit_snapshot(identity,&current)!=snapshot || (current!=undo.before && snapshot_hash(&current)!=undo.after_hash) { return Err("file changed since undo preparation".into()); }
+    if safe_path(root,relative)?!=path || transaction_identity(&path)?!=identity || read_target(&path)?!=current { return Err("file changed before undo".into()); }
+    if current==undo.before { return Ok(json!({"file":undo.file,"undone":true,"alreadyUndone":true})); }
+    atomic_write(&path,undo.before.as_bytes(),true)?;
+    Ok(json!({"file":undo.file,"undone":true,"alreadyUndone":false}))
 }
 
 fn checked_replacement(before: &str, old: &str, new: &str) -> Result<(String, usize)> {
@@ -582,7 +767,185 @@ mod tests {
     }
 
     #[test]
+    fn web_edit_fails_closed_when_persistence_fails_or_file_changes() {
+        let root=std::env::temp_dir().join(format!("isa-web-persist-{}",std::process::id()));fs::create_dir_all(&root).unwrap();
+        let path=root.join("file.txt");fs::write(&path,"old").unwrap();let proposal="File: file.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE";
+        let (_,snapshot)=web_prepare_apply(&root,proposal).unwrap();
+        assert!(web_apply_prepared_with(&root,proposal,&snapshot,|_|Err("storage failure".into())).is_err());assert_eq!(fs::read_to_string(&path).unwrap(),"old");
+        assert!(web_apply_prepared_with(&root,proposal,&snapshot,|_|{fs::write(&path,"external")?;Ok(())}).is_err());assert_eq!(fs::read_to_string(&path).unwrap(),"external");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn web_transaction_undo_rejects_same_content_replacement_after_review() {
+        let root=std::env::temp_dir().join(format!("isa-undo-review-identity-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();let path=root.join("file.txt");fs::write(&path,"old").unwrap();
+        let proposals=vec!["File: file.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE".to_string()];
+        let (_,snapshots)=web_prepare_transaction(&root,&proposals).unwrap();let mut undo=None;
+        assert_eq!(web_apply_transaction(&root,&proposals,&snapshots,|u|{undo=Some(u.clone());Ok(())}),super::super::edit_transaction::Outcome::Applied);
+        let undo=undo.unwrap();let (_,snapshots)=web_prepare_transaction_undo(&root,&undo).unwrap();
+        let replacement=root.join("replacement.txt");fs::write(&replacement,"new").unwrap();fs::rename(&replacement,&path).unwrap();
+        assert_eq!(web_apply_transaction_undo(&root,&undo,&snapshots),(super::super::edit_transaction::Outcome::NotStarted,false));
+        assert_eq!(fs::read_to_string(&path).unwrap(),"new");fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn web_edit_approval_rejects_same_content_replacement() {
+        let root=std::env::temp_dir().join(format!("isa-web-approval-identity-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();let path=root.join("file.txt");fs::write(&path,"old").unwrap();
+        let proposal="File: file.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE";
+        let (_,snapshot)=web_prepare_apply(&root,proposal).unwrap();
+        let proposals=vec![proposal.to_string()];let (_,snapshots)=web_prepare_transaction(&root,&proposals).unwrap();
+        let replacement=root.join("replacement.txt");fs::write(&replacement,"old").unwrap();fs::rename(&replacement,&path).unwrap();
+        assert!(web_apply_prepared_with(&root,proposal,&snapshot,|_|panic!("must not save undo")).is_err());
+        assert_eq!(web_apply_transaction(&root,&proposals,&snapshots,|_|panic!("must not save undo")),super::super::edit_transaction::Outcome::NotStarted);
+        assert_eq!(fs::read_to_string(&path).unwrap(),"old");fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn web_transaction_rejects_same_content_replacement_during_undo_persistence() {
+        let root=std::env::temp_dir().join(format!("isa-web-txn-identity-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();let path=root.join("file.txt");fs::write(&path,"old").unwrap();
+        let proposals=vec!["File: file.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE".to_string()];
+        let (_,snapshots)=web_prepare_transaction(&root,&proposals).unwrap();
+        let outcome=web_apply_transaction(&root,&proposals,&snapshots,|_| {
+            let replacement=root.join("replacement.txt");fs::write(&replacement,"old")?;fs::rename(&replacement,&path)?;Ok(())
+        });
+        assert_eq!(outcome,super::super::edit_transaction::Outcome::NotStarted);
+        assert_eq!(fs::read_to_string(&path).unwrap(),"old");fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn web_edit_rejects_same_content_replacement_during_undo_persistence() {
+        let root=std::env::temp_dir().join(format!("isa-web-edit-identity-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();let path=root.join("file.txt");fs::write(&path,"old").unwrap();
+        let proposal="File: file.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE";
+        let (_,snapshot)=web_prepare_apply(&root,proposal).unwrap();
+        let result=web_apply_prepared_with(&root,proposal,&snapshot,|_| {
+            let replacement=root.join("replacement.txt");fs::write(&replacement,"old")?;
+            fs::rename(&replacement,&path)?;Ok(())
+        });
+        assert!(result.is_err());assert_eq!(fs::read_to_string(&path).unwrap(),"old");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn web_undo_restores_empty_and_nonunique_replacements_and_rejects_changed_file() {
+        let root=std::env::temp_dir().join(format!("isa-web-undo-{}",std::process::id()));fs::create_dir_all(&root).unwrap();
+        let path=root.join("file.txt");fs::write(&path,"α OLD x x").unwrap();
+        let proposal="File: file.txt\n<<<<<<< SEARCH\nOLD\n=======\n\n>>>>>>> REPLACE";
+        let (_,snapshot)=web_prepare_apply(&root,proposal).unwrap();let (_,undo)=web_apply_prepared(&root,proposal,&snapshot).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(),"α  x x");assert!(web_prepare_undo(&root,&undo).is_ok());
+        fs::write(&path,"changed").unwrap();assert!(web_apply_undo(&root,&undo,"stale").is_err());assert_eq!(fs::read_to_string(&path).unwrap(),"changed");
+        fs::write(&path,"α  x x").unwrap();let (_,snapshot)=web_prepare_undo(&root,&undo).unwrap();web_apply_undo(&root,&undo,&snapshot).unwrap();assert_eq!(fs::read_to_string(&path).unwrap(),"α OLD x x");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn web_edit_serializes_competing_snapshots_and_rejects_stale_targets() {
+        let root = std::env::temp_dir().join(format!("isa-web-edit-race-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path=root.join("target.txt"); fs::write(&path,"old text").unwrap();
+        let a="File: target.txt\n<<<<<<< SEARCH\nold\n=======\nfirst\n>>>>>>> REPLACE";
+        let b="File: target.txt\n<<<<<<< SEARCH\nold\n=======\nsecond\n>>>>>>> REPLACE";
+        let (_,sa)=web_prepare_apply(&root,a).unwrap(); let (_,sb)=web_prepare_apply(&root,b).unwrap();
+        let barrier=std::sync::Barrier::new(3);
+        let (one,two)=std::thread::scope(|scope| {
+            let one=scope.spawn(|| { barrier.wait(); web_apply_prepared(&root,a,&sa).is_ok() });
+            let two=scope.spawn(|| { barrier.wait(); web_apply_prepared(&root,b,&sb).is_ok() });
+            barrier.wait(); (one.join().unwrap(),two.join().unwrap())
+        });
+        assert_ne!(one,two); let result=fs::read_to_string(&path).unwrap();
+        assert!(result=="first text" || result=="second text");
+        assert!(!root.join(".isa").exists());
+        fs::write(&path,"old text").unwrap(); let (_,snapshot)=web_prepare_apply(&root,a).unwrap();
+        fs::write(&path,"old text changed").unwrap(); assert!(web_apply_prepared(&root,a,&snapshot).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(),"old text changed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn strips_terminal_controls() {
         assert!(!visible("\u{1b}[31m").contains('\u{1b}'));
+    }
+}
+
+#[cfg(test)]
+mod windows_file_replacement_tests {
+    use super::*;
+    #[test]
+    fn windows_file_replacement_edit_preserves_latest_contents() {
+        let root = std::env::temp_dir().join(format!("isa-edit-replace-{}-{}-é", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("source-é.txt"); fs::write(&path, b"original").unwrap();
+        atomic_write(&path, b"first", true).unwrap();
+        atomic_write(&path, b"second", true).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_file_replacement_locked_destination_keeps_original() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("isa-edit-locked-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("source.txt"); fs::write(&path, b"original").unwrap();
+        let locked = OpenOptions::new().read(true).share_mode(0).open(&path).unwrap();
+        assert!(atomic_write(&path, b"new", false).is_err());
+        drop(locked);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_path_guard_tests {
+    use super::*;
+    #[test]
+    fn windows_path_guard_rejects_protected_names_and_junctions() {
+        let root = std::env::temp_dir().join(format!("isa-path-guard-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join(".env"), "secret").unwrap();
+        for name in [".ENV", ".env:stream", ".env.", "NORMAL~1"] {
+            assert!(safe_path(&root, Path::new(name)).is_err(), "accepted {name}");
+        }
+        let outside = root.join("outside"); fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("file.txt"), "original").unwrap();
+        let junction = root.join("junction");
+        let status = std::process::Command::new("cmd.exe").args(["/C", "mklink", "/J"]).arg(&junction).arg(&outside).output().unwrap();
+        assert!(status.status.success(), "could not create test junction: {}", String::from_utf8_lossy(&status.stderr));
+        assert!(safe_path(&root, Path::new("junction/file.txt")).is_err());
+        assert_eq!(fs::read_to_string(outside.join("file.txt")).unwrap(), "original");
+        fs::remove_dir(&junction).unwrap();
+        let isa = root.join(".isa");
+        let status = std::process::Command::new("cmd.exe").args(["/C", "mklink", "/J"]).arg(&isa).arg(&outside).output().unwrap();
+        assert!(status.status.success(), "could not create backup test junction");
+        assert!(backup_dir(&root).is_err());
+        fs::remove_dir(&isa).unwrap(); fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_transaction_identity_tests {
+    use super::*;
+    use super::super::edit_transaction::Outcome;
+    #[test]
+    fn windows_transaction_identity_prepare_apply_and_in_memory_undo() {
+        let root=std::env::temp_dir().join(format!("isa-win-transaction-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();fs::write(root.join("a.txt"),"old a").unwrap();fs::write(root.join("b.txt"),"old b").unwrap();
+        let proposals=vec!["File: a.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE".to_string(),"File: b.txt\n<<<<<<< SEARCH\nold\n=======\nnew\n>>>>>>> REPLACE".to_string()];
+        let (_,snapshots)=web_prepare_transaction(&root,&proposals).unwrap();
+        let mut saved=None;
+        assert_eq!(web_apply_transaction(&root,&proposals,&snapshots,|undo| {saved=Some(undo.clone());Ok(())}),Outcome::Applied);
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(),"new a");assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(),"new b");
+        let undo=saved.unwrap();let (_,snapshots)=web_prepare_transaction_undo(&root,&undo).unwrap();
+        assert_eq!(web_apply_transaction_undo(&root,&undo,&snapshots),(Outcome::Applied,false));
+        assert_eq!(fs::read_to_string(root.join("a.txt")).unwrap(),"old a");assert_eq!(fs::read_to_string(root.join("b.txt")).unwrap(),"old b");
+        let (_,snapshots)=web_prepare_transaction_undo(&root,&undo).unwrap();
+        assert_eq!(web_apply_transaction_undo(&root,&undo,&snapshots),(Outcome::Applied,true));
+        fs::hard_link(root.join("a.txt"),root.join("alias.txt")).unwrap();
+        assert!(web_prepare_transaction(&root,&proposals).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

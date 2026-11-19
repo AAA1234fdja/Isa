@@ -2,7 +2,7 @@
 const readline=require('node:readline'),fs=require('node:fs');
 const mode=process.argv[2]||'valid',marker=process.argv[3];
 if(marker)fs.writeFileSync(marker+'.started','started');
-let initialized=false,pendingPing=null;
+let initialized=false,pendingPing=null,calls=0;
 function send(v){process.stdout.write(JSON.stringify(v)+'\n')}
 readline.createInterface({input:process.stdin,crlfDelay:Infinity}).on('line',line=>{
  const request=JSON.parse(line);
@@ -19,11 +19,11 @@ readline.createInterface({input:process.stdin,crlfDelay:Infinity}).on('line',lin
  if(request.method==='tools/list'){
   if(mode==='ping'){pendingPing=request.id;return send({jsonrpc:'2.0',id:'server-ping',method:'ping'});}
   if(mode==='cursor')return send({jsonrpc:'2.0',id:request.id,result:{tools:[],nextCursor:'repeat'}});
-  if(!request.params.cursor)return send({jsonrpc:'2.0',method:'notifications/message',params:{level:'info',data:'untrusted'}}),send({jsonrpc:'2.0',id:request.id,result:{tools:[{name:'echo',description:'echo test',inputSchema:{type:'object'}}],nextCursor:'page2'}});
+  if(!request.params.cursor)return send({jsonrpc:'2.0',method:'notifications/message',params:{level:'info',data:'untrusted'}}),send({jsonrpc:'2.0',id:request.id,result:{tools:[{name:'echo',description:'echo test',inputSchema:mode==='schema'?{type:'object',properties:{value:{type:'string',minLength:1}},required:['value'],additionalProperties:false}:{type:'object'},...(mode==='retry'?{annotations:{idempotentHint:true}}:{})}],nextCursor:'page2'}});
   return send({jsonrpc:'2.0',id:request.id,result:{tools:[{name:'write',description:'writes a marker',inputSchema:{type:'object'}}]}});
  }
  if(request.method==='tools/call'){
-  if(marker)fs.writeFileSync(marker,JSON.stringify(request.params));
-  return send({jsonrpc:'2.0',id:request.id,result:{content:[{type:'text',text:'fixture result'}],isError:mode==='toolerror'}});
+  calls++;if(marker){fs.writeFileSync(marker,JSON.stringify(request.params));fs.writeFileSync(marker+'.calls',String(calls));}
+  return send({jsonrpc:'2.0',id:request.id,result:{content:[{type:'text',text:'fixture result'}],isError:mode==='toolerror'||(mode==='retry'&&calls===1)}});
  }
 });

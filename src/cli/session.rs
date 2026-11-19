@@ -112,6 +112,7 @@ pub fn save(root: &Path, id: &str, messages: &[Message]) -> Result<()> {
         let mut file = options.open(&temporary)?;
         file.write_all(&data)?;
         file.sync_all()?;
+        drop(file); // Close the temporary file before replacing the destination.
         fs::rename(&temporary, &path)?;
         Ok(())
     })();
@@ -348,4 +349,57 @@ pub fn search(root: &Path, query: &str) -> Result<Vec<SessionHit>> {
         }
     }
     Ok(hits)
+}
+
+// Opt-in local web bridge: bounded, read-only and independent of CLI writes.
+// Directory checks reject symlinks but do not eliminate hostile filesystem races.
+pub(super) fn web_list(root: &Path) -> Result<Value> {
+    check_session_dirs(root)?;
+    let entries=match fs::read_dir(session_dir(root)) { Ok(v)=>v, Err(e) if e.kind()==std::io::ErrorKind::NotFound => return Ok(json!({"sessions":[],"truncated":false})), Err(e)=>return Err(e.into()) };
+    let mut ids=Vec::new();let mut truncated=false;
+    for (count,entry) in entries.enumerate() {
+        if count>=1000 {truncated=true;break}
+        let entry=entry?;if !entry.file_type()?.is_file() {continue}
+        let path=entry.path();if path.extension().and_then(|s|s.to_str())!=Some("json") {continue}
+        if let Some(id)=path.file_stem().and_then(|s|s.to_str()) {if validate_id(id).is_ok(){ids.push(id.to_string())}}
+    }
+    ids.sort();if ids.len()>100 {ids.truncate(100);truncated=true}
+    Ok(json!({"sessions":ids,"truncated":truncated}))
+}
+pub(super) fn web_read(root: &Path, id:&str) -> Result<Value> {
+    use std::io::Read;
+    const MAX_FILE:u64=256*1024;const MAX_TEXT:usize=128*1024;
+    let path=session_path(root,id)?;
+    let meta=fs::symlink_metadata(&path)?;
+    if !meta.is_file() || meta.file_type().is_symlink() || meta.len()>MAX_FILE {return Err("invalid or oversized session".into())}
+    let mut options=fs::OpenOptions::new();options.read(true);
+    #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW);}
+    let file=options.open(&path)?;let opened=file.metadata()?;
+    if !opened.is_file() || opened.len()>MAX_FILE {return Err("invalid or oversized session".into())}
+    let mut bytes=Vec::new();file.take(MAX_FILE+1).read_to_end(&mut bytes)?;if bytes.len() as u64>MAX_FILE {return Err("session too large".into())}
+    let value:Value=serde_json::from_slice(&bytes)?;if value.get("version").and_then(Value::as_u64)!=Some(1){return Err("unsupported session version".into())}
+    let entries=value.get("messages").and_then(Value::as_array).ok_or("invalid session")?;
+    if entries.is_empty() || entries.len()>200 {return Err("session must contain 1 to 200 messages".into())}
+    let mut messages=Vec::new();let mut total=0usize;
+    for entry in entries {
+        let role=entry.get("role").and_then(Value::as_str).filter(|r|matches!(*r,"user"|"assistant")).ok_or("invalid role")?;
+        let text=entry.get("content").and_then(Value::as_str).filter(|s|!s.trim().is_empty()&&!s.contains('\0')).ok_or("invalid content")?;
+        total=total.checked_add(text.len()).ok_or("session too large")?;if text.len()>65536 || total>MAX_TEXT {return Err("session too large".into())}
+        messages.push(json!({"role":role,"text":text}));
+    }
+    Ok(json!({"id":id,"messages":messages}))
+}
+
+#[cfg(test)]
+mod windows_file_replacement_tests {
+    use super::*;
+    #[test]
+    fn windows_file_replacement_session_saves_twice() {
+        let root = std::env::temp_dir().join(format!("isa-session-replace-{}-{}-é", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        save(&root, "test", &[Message::new("user", "first")]).unwrap();
+        save(&root, "test", &[Message::new("user", "second")]).unwrap();
+        assert_eq!(load(&root, "test").unwrap()[0].content, "second");
+        fs::remove_dir_all(root).unwrap();
+    }
 }

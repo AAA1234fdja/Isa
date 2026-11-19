@@ -53,7 +53,7 @@ fn save(root: &Path, index: &Index) -> Result<()> {
     let result = (|| -> Result<()> {
         let mut opts = OpenOptions::new(); opts.write(true).create_new(true);
         #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; opts.mode(0o600); }
-        let mut file = opts.open(&temp)?; file.write_all(&bytes)?; file.sync_all()?; fs::rename(&temp, &path)?; Ok(())
+        let mut file = opts.open(&temp)?; file.write_all(&bytes)?; file.sync_all()?; drop(file); fs::rename(&temp, &path)?; Ok(())
     })();
     if result.is_err() { let _ = fs::remove_file(temp); } result
 }
@@ -156,4 +156,18 @@ pub fn search(root: &Path, query: &str) -> Result<serde_json::Value> {
     #[test] fn cosine_ranks_by_direction() { assert!(cosine(&[1.0, 0.0], &[1.0, 0.0]).unwrap() > cosine(&[1.0, 0.0], &[0.0, 1.0]).unwrap()); assert!(cosine(&[0.0], &[0.0]).is_err()); assert!(cosine(&[1.0], &[1.0, 2.0]).is_err()); }
     #[test] fn chunks_are_bounded_and_preserve_unicode() { let text = format!("first\n{}\nlast", "é".repeat(3000)); let chunks = split(&text); assert!(chunks.iter().all(|(_,_,s)| s.chars().count() <= CHUNK_CHARS)); assert_eq!(chunks[0].0, 1); assert_eq!(chunks.last().unwrap().1, 3); }
     #[test] fn paths_are_relative() { assert!(safe_path("src/main.rs")); assert!(!safe_path("../secret")); assert!(!safe_path("/etc/passwd")); }
+}
+
+#[cfg(test)]
+mod windows_file_replacement_tests {
+    use super::*;
+    #[test]
+    fn windows_file_replacement_semantic_index_saves_twice() {
+        let root = std::env::temp_dir().join(format!("isa-semantic-replace-{}-{}-é", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let mut index = Index { version: 1, model: "first".into(), digest: "digest".into(), chunks: vec![] };
+        save(&root, &index).unwrap(); index.model = "second".into(); save(&root, &index).unwrap();
+        assert_eq!(load(&root).unwrap().model, "second");
+        fs::remove_dir_all(root).unwrap();
+    }
 }

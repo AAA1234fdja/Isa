@@ -1,4 +1,4 @@
-use super::Result;
+use super::{repository_filter::excluded, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::io::Read;
@@ -8,18 +8,28 @@ const MAX_FILES: usize = 20_000;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_RESULTS: usize = 1_000;
 
-fn excluded(name: &str) -> bool {
-    matches!(name, ".git" | ".isa" | "node_modules" | "target" | "dist" | "build" | ".venv" | "vendor" | ".env" | ".git-credentials" | ".netrc" | ".ssh" | ".aws" | "id_rsa" | "id_ed25519")
-        || name.starts_with(".env.")
-}
-
 pub fn files(root: &Path) -> Result<Vec<PathBuf>> {
     let mut result = Vec::new();
     let walker = ignore::WalkBuilder::new(root)
         .hidden(false)
         .follow_links(false)
         .require_git(false)
-        .filter_entry(|entry| entry.depth() == 0 || !excluded(&entry.file_name().to_string_lossy()))
+        .filter_entry(|entry| {
+            if entry.depth() == 0 { return true; }
+            let name = entry.file_name();
+            // Fail closed on unrepresentable Windows names and reparse points,
+            // including junction directories. This is still subject to races.
+            if cfg!(windows) && name.to_str().is_none() { return false; }
+            if excluded(&name.to_string_lossy()) { return false; }
+            #[cfg(windows)]
+            {
+                match fs::symlink_metadata(entry.path()) {
+                    Ok(metadata) if !super::edit_path_guard::is_link_or_reparse(&metadata) => (),
+                    _ => return false,
+                }
+            }
+            true
+        })
         .build();
     for entry in walker {
         let entry = match entry {
@@ -142,5 +152,28 @@ mod tests {
     #[test]
     fn rejects_empty_search() {
         assert!(search(Path::new("."), "").is_err());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_repository_filter_tests {
+    use super::*;
+    #[test]
+    fn windows_repository_filter_skips_sensitive_names_and_junctions() {
+        let base = std::env::temp_dir().join(format!("isa-windows-repository-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = base.join("workspace"); let outside = base.join("outside");
+        fs::create_dir_all(&root).unwrap(); fs::create_dir(&outside).unwrap();
+        fs::write(root.join(".ENV.Local"), "secret-marker").unwrap();
+        fs::create_dir(root.join(".SSH")).unwrap(); fs::write(root.join(".SSH/key"), "secret-marker").unwrap();
+        fs::write(root.join("normal.txt"), "visible-marker").unwrap();
+        fs::write(outside.join("outside.txt"), "secret-marker").unwrap();
+        let junction = root.join("linked");
+        let result = Command::new("cmd.exe").args(["/C", "mklink", "/J"]).arg(&junction).arg(&outside).output().unwrap();
+        assert!(result.status.success(), "could not create test junction: {}", String::from_utf8_lossy(&result.stderr));
+        let paths = files(&root).unwrap();
+        assert_eq!(paths, vec![PathBuf::from("normal.txt")]);
+        assert!(search(&root, "secret-marker").unwrap().is_empty());
+        assert_eq!(search(&root, "visible-marker").unwrap().len(), 1);
+        fs::remove_dir(&junction).unwrap(); fs::remove_dir_all(base).unwrap();
     }
 }

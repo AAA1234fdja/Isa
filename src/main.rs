@@ -2,6 +2,10 @@ use std::env;
 mod http;
 mod plugins;
 mod web_supervision;
+mod windows_supervision_gate;
+mod web_audit_store;
+#[allow(dead_code)]
+mod web_audit_crypto;
 #[allow(dead_code)]
 mod cli;
 
@@ -10,6 +14,26 @@ use std::net::{TcpListener, TcpStream};
 
 // Embedded assets are a fallback when running outside the project directory.
 const INTERFACE: &str = include_str!("../index.html");
+const INTERFACE_CSS: &[u8] = include_bytes!("../assets/interface.css");
+const INTERFACE_JS: &[u8] = include_bytes!("../assets/interface.js");
+const PREVIEW_JS: &[u8] = include_bytes!("../assets/preview.js");
+const LAYOUT_JS: &[u8] = include_bytes!("../assets/layout.js");
+const APPEARANCE_JS: &[u8] = include_bytes!("../assets/appearance.js");
+const SUPERVISED_ACTIONS_JS: &[u8] = include_bytes!("../assets/supervised-actions.js");
+const ATTACHMENTS_JS: &[u8] = include_bytes!("../assets/attachments.js");
+const PROJECTS_JS: &[u8] = include_bytes!("../assets/projects.js");
+const SETTINGS_JS: &[u8] = include_bytes!("../assets/settings.js");
+const AGENTS_JS: &[u8] = include_bytes!("../assets/agents.js");
+const ROUTING_JS: &[u8] = include_bytes!("../assets/routing.js");
+const CHAT_JS: &[u8] = include_bytes!("../assets/chat.js");
+const SIDEBAR_JS: &[u8] = include_bytes!("../assets/sidebar.js");
+const NOTIFICATIONS_JS: &[u8] = include_bytes!("../assets/notifications.js");
+const PROVIDER_UTILS_JS: &[u8] = include_bytes!("../assets/provider-utils.js");
+const CONVERSATION_UTILS_JS: &[u8] = include_bytes!("../assets/conversation-utils.js");
+const PROVIDER_CLIENT_JS: &[u8] = include_bytes!("../assets/provider-client.js");
+const POOL_RUNNER_JS: &[u8] = include_bytes!("../assets/pool-runner.js");
+const PROJECT_STORE_JS: &[u8] = include_bytes!("../assets/project-store.js");
+const PROJECT_UI_MODULE_JS: &[u8] = include_bytes!("../assets/project-ui-module.js");
 const LOGO: &[u8] = include_bytes!("../assets/isa-logo.png");
 const TRANSPARENT_LOGO: &[u8] = include_bytes!("../assets/isa-logo-transparent.png");
 
@@ -199,7 +223,7 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
-        ("POST", "/api/exec/policy" | "/api/exec/prepare" | "/api/exec/run" | "/api/exec/cancel" | "/api/actions/prepare" | "/api/actions/run" | "/api/actions/cancel" | "/api/actions/mcp/close" | "/api/actions/pool/start" | "/api/actions/pool/close") => {
+        ("POST", "/api/exec/policy" | "/api/exec/prepare" | "/api/exec/run" | "/api/exec/cancel" | "/api/actions/prepare" | "/api/actions/run" | "/api/actions/cancel" | "/api/actions/stop" | "/api/actions/mcp/close" | "/api/actions/pool/start" | "/api/actions/pool/close" | "/api/actions/events" | "/api/actions/usage" | "/api/actions/workspaces" | "/api/actions/sessions/list" | "/api/actions/sessions/read") => {
             let (status, body) = web_supervision::handle(path, &request, &stream);
             (status, "application/json; charset=utf-8", serde_json::to_vec(&body).unwrap_or_default())
         }
@@ -210,12 +234,12 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
                 let root = std::env::current_dir().unwrap_or_default();
                 let catalog = plugins::catalog(&root);
                 let available = env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty());
-                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"symbolLookupAvailable":agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
+                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"backendKind":"rust","localActionsPlatformSupported":web_supervision::platform_supported(),"localActionsWindowsReadOnly":windows_supervision_gate::enabled(),"localActionsWindowsShellExperimental":windows_supervision_gate::shell_enabled(),"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"symbolLookupAvailable":agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
             }
         },
         ("POST", "/api/edit-proposal") => {
-            if !request.is_same_origin_json() {
-                ("403 Forbidden", "application/json", br#"{"error":"Same-origin JSON request required"}"#.to_vec())
+            if !web_supervision::authorized(&request, &stream) {
+                ("403 Forbidden", "application/json", br#"{"error":"Local workspace access requires authentication and direct loopback."}"#.to_vec())
             } else if let Ok((file, instruction)) = parse_edit_generation(&request.body) {
                 match (agent_workspace(), env::var("ISA_WEB_MODEL").ok().filter(|s| !s.trim().is_empty())) {
                     (Some(root), Some(model)) => match cli::web_propose_edit(&root, &file, &instruction, &model) {
@@ -227,8 +251,8 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
             } else { ("400 Bad Request", "application/json", br#"{"error":"Invalid request."}"#.to_vec()) }
         },
         ("POST", "/api/edit-preview") => {
-            if !request.is_same_origin_json() {
-                ("403 Forbidden", "application/json", br#"{"error":"Same-origin JSON request required"}"#.to_vec())
+            if !web_supervision::authorized(&request, &stream) {
+                ("403 Forbidden", "application/json", br#"{"error":"Local workspace access requires authentication and direct loopback."}"#.to_vec())
             } else if let Ok(proposal) = parse_edit_preview(&request.body) {
                 if let Some(root) = agent_workspace() {
                     match cli::web_preview_edit(&root, &proposal) {
@@ -243,8 +267,8 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
             }
         },
         ("POST", "/api/symbols") => {
-            if !request.is_same_origin_json() {
-                ("403 Forbidden", "application/json", br#"{"error":"Same-origin JSON request required"}"#.to_vec())
+            if !web_supervision::authorized(&request, &stream) {
+                ("403 Forbidden", "application/json", br#"{"error":"Local workspace access requires authentication and direct loopback."}"#.to_vec())
             } else if let Ok((query, mode)) = parse_symbol_query(&request.body) {
                 if let Some(root) = agent_workspace() {
                     let lookup = match mode { SymbolMode::Declarations => cli::web_symbols(&root, &query), SymbolMode::Callers => cli::web_callers(&root, &query) };
@@ -260,8 +284,8 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
             }
         },
         ("POST", "/api/changes") => {
-            if !request.is_same_origin_json() {
-                ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
+            if !web_supervision::authorized(&request, &stream) {
+                ("403 Forbidden", "application/json", b"{\"error\":\"Local workspace access requires authentication and direct loopback.\"}".to_vec())
             } else if let Ok(path) = env::var("ISA_WEB_WORKSPACE") {
                 match std::path::Path::new(&path).canonicalize() {
                     Ok(root) if root.is_dir() => match cli::web_changes(&root) {
@@ -277,6 +301,8 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("POST", "/api/chat") if env::var("ISA_WEB_MODEL").ok().is_some_and(|s| !s.trim().is_empty()) => {
             if !request.is_same_origin_json() {
                 ("403 Forbidden", "application/json", b"{\"error\":\"Same-origin JSON request required\"}".to_vec())
+            } else if !web_supervision::authorized(&request, &stream) {
+                ("403 Forbidden", "application/json", br#"{"provider":"ollama","role":"assistant","error":{"message":"Local model access requires the local execution token and direct loopback access."}}"#.to_vec())
             } else {
                 let model = env::var("ISA_WEB_MODEL").unwrap_or_default();
                 match web_chat(&request.body, &model) {
@@ -322,6 +348,86 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("GET" | "HEAD", "/" | "/index.html") => (
             "200 OK", "text/html; charset=utf-8",
             std::fs::read("index.html").unwrap_or_else(|_| INTERFACE.as_bytes().to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/interface.css") => (
+            "200 OK", "text/css; charset=utf-8",
+            std::fs::read("assets/interface.css").unwrap_or_else(|_| INTERFACE_CSS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/interface.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/interface.js").unwrap_or_else(|_| INTERFACE_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/preview.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/preview.js").unwrap_or_else(|_| PREVIEW_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/layout.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/layout.js").unwrap_or_else(|_| LAYOUT_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/appearance.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/appearance.js").unwrap_or_else(|_| APPEARANCE_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/supervised-actions.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/supervised-actions.js").unwrap_or_else(|_| SUPERVISED_ACTIONS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/attachments.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/attachments.js").unwrap_or_else(|_| ATTACHMENTS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/projects.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/projects.js").unwrap_or_else(|_| PROJECTS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/settings.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/settings.js").unwrap_or_else(|_| SETTINGS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/agents.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/agents.js").unwrap_or_else(|_| AGENTS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/routing.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/routing.js").unwrap_or_else(|_| ROUTING_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/chat.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/chat.js").unwrap_or_else(|_| CHAT_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/sidebar.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/sidebar.js").unwrap_or_else(|_| SIDEBAR_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/notifications.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/notifications.js").unwrap_or_else(|_| NOTIFICATIONS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/provider-utils.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/provider-utils.js").unwrap_or_else(|_| PROVIDER_UTILS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/conversation-utils.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/conversation-utils.js").unwrap_or_else(|_| CONVERSATION_UTILS_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/provider-client.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/provider-client.js").unwrap_or_else(|_| PROVIDER_CLIENT_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/pool-runner.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/pool-runner.js").unwrap_or_else(|_| POOL_RUNNER_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/project-store.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/project-store.js").unwrap_or_else(|_| PROJECT_STORE_JS.to_vec()),
+        ),
+        ("GET" | "HEAD", "/assets/project-ui-module.js") => (
+            "200 OK", "text/javascript; charset=utf-8",
+            std::fs::read("assets/project-ui-module.js").unwrap_or_else(|_| PROJECT_UI_MODULE_JS.to_vec()),
         ),
         ("GET" | "HEAD", "/assets/vendor/pdf.min.mjs") => ("200 OK", "text/javascript; charset=utf-8", include_bytes!("../assets/vendor/pdf.min.mjs").to_vec()),
         ("GET" | "HEAD", "/assets/vendor/pdf.worker.min.mjs") => ("200 OK", "text/javascript; charset=utf-8", include_bytes!("../assets/vendor/pdf.worker.min.mjs").to_vec()),

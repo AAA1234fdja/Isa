@@ -1,17 +1,82 @@
-#[path = "../../Harness Isa/mod.rs"]
+#[path = "../harness/mod.rs"]
 mod harness;
-#[path = "../../Skills/mod.rs"]
+#[path = "../skills/mod.rs"]
 mod skills;
 mod connectors;
 mod context;
 mod agent_loop;
 mod semantic;
 mod edit;
+mod edit_path_guard;
+mod edit_transaction;
+mod web_undo_store;
+#[allow(dead_code)]
+#[path = "../web_audit_crypto.rs"] mod web_audit_crypto;
 mod feedback;
+mod command_control;
+#[cfg(windows)]
+#[allow(dead_code)]
+#[path = "../windows_supervision_gate.rs"]
+mod windows_supervision_gate;
+#[allow(dead_code)]
+mod windows_command_line;
+#[allow(dead_code)]
+mod windows_acl_policy;
+#[allow(dead_code)]
+mod windows_undo_frame;
+#[allow(dead_code)]
+mod powershell_command;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_job;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_suspended_process;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_pipe;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_mcp_pipe;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_mcp_write;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_process_attributes;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_powershell;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_file_identity;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_private_acl;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_undo_store;
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod windows_audit_store;
 mod mcp;
+mod mcp_stdio_buffer;
+mod mcp_stdio_write;
 mod web_limits;
+// Staged sandbox planning is compiled only in tests; it cannot execute or copy.
+#[cfg(test)]
+mod windows_sandbox_manifest;
+#[cfg(test)]
+mod windows_sandbox_export_plan;
+#[cfg(test)]
+mod windows_sandbox_import_plan;
+#[cfg(test)]
+mod windows_sandbox_frame;
+#[cfg(test)]
+mod windows_sandbox_wsb;
 mod registry;
 mod repository;
+mod repository_filter;
 mod processes;
 mod session;
 mod symbols;
@@ -31,6 +96,7 @@ Usage:\n\
   isa-cli context [directory]               Show repository and git context\n\
   isa-cli diff [--staged] [directory]       Show a bounded Git diff\n\
   isa-cli processes [directory]             Supervise approved local processes\n\
+  isa-cli audit-key init [directory]         Initialize encrypted audit key\n\
   isa-cli mcp <list|call|propose|loop> ...              Use an approved MCP stdio server\n\
   isa-cli skill <command> ...               Manage reusable skills\n\
   isa-cli harness-eval <suite.json> <mode>   Evaluate response harness checks\n\
@@ -118,6 +184,15 @@ pub fn run(args: Vec<String>) -> Result<()> {
             let staged = args.get(1).is_some_and(|arg| arg == "--staged");
             let root = directory(&args, if staged { 2 } else { 1 })?;
             print!("{}", repository::git_diff(&root, staged)?);
+        }
+        Some("audit-key") => {
+            if args.get(1).map(String::as_str)!=Some("init") || args.len()>3 { return Err("usage: isa-cli audit-key init [directory]".into()); }
+            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {return Err("audit key initialization requires an interactive terminal".into());}
+            let root=directory(&args,2)?;
+            println!("Initialize a new audit encryption key in the OS credential store for {}?\nIf the key is lost, encrypted audit records cannot be recovered. Existing keys are never replaced. Use only one initializer at a time. Type yes to continue:",root.display());
+            io::stdout().flush()?;let mut answer=String::new();io::stdin().read_line(&mut answer)?;
+            if answer.trim()!="yes" {return Err("Audit key initialization cancelled".into());}
+            web_audit_crypto::initialize(&root)?;println!("Audit key initialized. No key material was displayed.");
         }
         Some("processes") => { if args.len() > 2 { return Err("usage: isa-cli processes [directory]".into()); } let root = directory(&args, 1)?; processes::interactive(&root)?; }
         Some("mcp") => {
@@ -489,8 +564,31 @@ pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, S
     Ok((outcome.answer, outcome.steps))
 }
 
-pub(crate) fn web_run_command(root: &std::path::Path, command: &str, profile: WebExecutionProfile) -> Result<serde_json::Value> {
-    feedback::web_command(root, command, profile)
+pub(crate) fn web_work_start(root: &std::path::Path) -> Result<serde_json::Value> { work::web_start(root) }
+pub(crate) fn web_work_status(root: &std::path::Path) -> Result<serde_json::Value> { work::web_status(root) }
+pub(crate) fn web_work_prepare_end(root: &std::path::Path) -> Result<String> { work::web_prepare_end(root) }
+pub(crate) fn web_work_end(root: &std::path::Path, snapshot:&str) -> Result<serde_json::Value> { work::web_end(root,snapshot) }
+pub(crate) fn web_semantic_search(root: &std::path::Path, query: &str) -> Result<serde_json::Value> { semantic::search(root,query) }
+pub(crate) fn web_list_sessions(root: &std::path::Path) -> Result<serde_json::Value> { session::web_list(root) }
+pub(crate) fn web_read_session(root: &std::path::Path, id: &str) -> Result<serde_json::Value> { session::web_read(root,id) }
+
+pub(crate) fn web_prepare_apply(root: &std::path::Path, proposal: &str) -> Result<(serde_json::Value, String)> {
+    edit::web_prepare_apply(root, proposal)
+}
+pub(crate) fn web_prepare_transaction(root: &std::path::Path, proposals: &[String]) -> Result<(serde_json::Value, Vec<String>)> { edit::web_prepare_transaction(root, proposals) }
+pub(crate) fn web_apply_transaction<F: FnOnce(&WebTransactionUndo)->Result<()>>(root: &std::path::Path, proposals: &[String], snapshots: &[String], persist:F) -> edit_transaction::Outcome { edit::web_apply_transaction(root, proposals, snapshots, persist) }
+pub(crate) use edit::WebTransactionUndo;
+pub(crate) fn web_prepare_transaction_undo(root: &std::path::Path, undo: &WebTransactionUndo) -> Result<(serde_json::Value,Vec<String>)> { edit::web_prepare_transaction_undo(root,undo) }
+pub(crate) fn web_apply_transaction_undo(root: &std::path::Path, undo: &WebTransactionUndo, snapshots:&[String]) -> (edit_transaction::Outcome,bool) { edit::web_apply_transaction_undo(root,undo,snapshots) }
+pub(crate) use edit_transaction::Outcome as WebTransactionOutcome;
+pub(crate) use edit::WebEditUndo;
+pub(crate) fn web_apply_prepared<F: FnOnce(&WebEditUndo)->Result<()>>(root: &std::path::Path, proposal: &str, snapshot: &str, persist:F) -> Result<serde_json::Value> { edit::web_apply_prepared_with(root, proposal, snapshot,persist) }
+pub(crate) use web_undo_store::{save as save_web_undo, load as load_web_undo};
+pub(crate) fn web_prepare_undo(root: &std::path::Path, undo: &WebEditUndo) -> Result<(serde_json::Value,String)> { edit::web_prepare_undo(root, undo) }
+pub(crate) fn web_apply_undo(root: &std::path::Path, undo: &WebEditUndo, snapshot:&str) -> Result<serde_json::Value> { edit::web_apply_undo(root, undo,snapshot) }
+
+pub(crate) fn web_run_command(root: &std::path::Path, command: &str, profile: WebExecutionProfile, cancel: &std::sync::atomic::AtomicBool) -> Result<serde_json::Value> {
+    feedback::web_command(root, command, profile, cancel)
 }
 
 // The browser server passes only validated conversation roles to this entry point.

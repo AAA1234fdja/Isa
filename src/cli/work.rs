@@ -169,3 +169,31 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+// Web actions serialize with each other, not with CLI processes or outside writers.
+static WEB_WORK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+fn baseline_digest(root:&Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let path=snapshot_path(root,false)?;let meta=fs::symlink_metadata(&path)?;
+    if !meta.is_file() || meta.file_type().is_symlink() || meta.len()>MAX_SNAPSHOT_BYTES {return Err("invalid work baseline".into())}
+    let mut options=OpenOptions::new();options.read(true);
+    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt;options.custom_flags(libc::O_NOFOLLOW); }
+    let file=options.open(&path)?;if !file.metadata()?.is_file() {return Err("invalid work baseline".into())}
+    let mut data=Vec::new();file.take(MAX_SNAPSHOT_BYTES+1).read_to_end(&mut data)?;
+    if data.len() as u64>MAX_SNAPSHOT_BYTES {return Err("work baseline too large".into())}
+    Ok(format!("{:x}",Sha256::digest(&data)))
+}
+pub(super) fn web_prepare_end(root:&Path)->Result<String> { baseline_digest(root) }
+pub(super) fn web_start(root:&Path)->Result<Value> {
+    let _guard=WEB_WORK_LOCK.lock().map_err(|_|"work lock unavailable")?;start(root)?;Ok(json!({"started":true}))
+}
+pub(super) fn web_status(root:&Path)->Result<Value> {
+    let _guard=WEB_WORK_LOCK.lock().map_err(|_|"work lock unavailable")?;let s=status(root)?;
+    Ok(json!({"added":s.added,"removed":s.removed,"changedFiles":s.changed_files,"skippedFiles":s.skipped_files}))
+}
+pub(super) fn web_end(root:&Path,expected:&str)->Result<Value> {
+    let _guard=WEB_WORK_LOCK.lock().map_err(|_|"work lock unavailable")?;
+    if baseline_digest(root)?!=expected {return Err("work baseline changed since preparation".into())}
+    end(root)?;Ok(json!({"ended":true}))
+}

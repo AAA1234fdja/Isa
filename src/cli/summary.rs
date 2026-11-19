@@ -64,6 +64,7 @@ fn save(root: &Path, id: &str, variant: Variant, content: &str) -> Result<()> {
         let mut output = options.open(&temporary)?;
         output.write_all(content.as_bytes())?;
         output.sync_all()?;
+        drop(output); // Close the temporary file before replacing the destination.
         fs::rename(&temporary, &file)?;
         Ok(())
     })();
@@ -123,5 +124,19 @@ mod tests {
         let text = prompt(Variant::LastPrompt, &messages, None).unwrap();
         assert!(text.contains("new request"));
         assert!(!text.contains("old request"));
+    }
+}
+
+#[cfg(test)]
+mod windows_file_replacement_tests {
+    use super::*;
+    #[test]
+    fn windows_file_replacement_summary_saves_twice() {
+        let root = std::env::temp_dir().join(format!("isa-summary-replace-{}-{}-é", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        save(&root, "test", Variant::AllChat, "first").unwrap();
+        save(&root, "test", Variant::AllChat, "second").unwrap();
+        assert_eq!(read(&root, "test", Variant::AllChat).unwrap(), "second");
+        fs::remove_dir_all(root).unwrap();
     }
 }

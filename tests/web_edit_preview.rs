@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
+const TOKEN: &str = "test-only-local-capability-0123456789";
 static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
 // The server takes an address, not an inherited socket. Serialize port reservation
 // through readiness so concurrent tests cannot pick the same just-released port.
@@ -14,7 +15,8 @@ static START_LOCK: Mutex<()> = Mutex::new(());
 
 struct Server { child: Child, address: String, workspace: PathBuf }
 impl Server {
-    fn start(configure_workspace: bool) -> Self {
+    fn start(configure_workspace: bool) -> Self { Self::with_model(configure_workspace, false) }
+    fn with_model(configure_workspace: bool, model: bool) -> Self {
         let _startup = START_LOCK.lock().unwrap();
         let id = NEXT_DIR.fetch_add(1, Ordering::Relaxed);
         let workspace = std::env::temp_dir().join(format!("isa-web-review-{}-{id}", std::process::id()));
@@ -23,8 +25,9 @@ impl Server {
         let address = reservation.local_addr().unwrap().to_string();
         drop(reservation);
         let mut command = Command::new(env!("CARGO_BIN_EXE_isa"));
-        command.current_dir(&workspace).env("ISA_ADDRESS", &address).env_remove("ISA_WEB_AGENT_WORKSPACE").env_remove("ISA_WEB_MODEL").stdout(Stdio::null()).stderr(Stdio::null());
+        command.current_dir(&workspace).env("ISA_WEB_EXEC_TOKEN", TOKEN).env("ISA_ADDRESS", &address).env_remove("ISA_WEB_AGENT_WORKSPACE").env_remove("ISA_WEB_MODEL").stdout(Stdio::null()).stderr(Stdio::null());
         if configure_workspace { command.env("ISA_WEB_AGENT_WORKSPACE", &workspace); }
+        if model { command.env("ISA_WEB_MODEL", "fake-model-not-invoked"); }
         let child = command.spawn().expect("start ISA server");
         let mut server = Self { child, address, workspace };
         for _ in 0..200 {
@@ -41,7 +44,7 @@ impl Server {
         let mut stream = TcpStream::connect(&self.address).unwrap();
         stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         let origin_header = origin.map(|s| format!("Origin: {s}\r\n")).unwrap_or_default();
-        write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\n{origin_header}Content-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", self.address, body.len()).unwrap();
+        write!(stream, "{method} {path} HTTP/1.1\r\nHost: {}\r\n{origin_header}Content-Type: {content_type}\r\nX-ISA-Exec-Token: {TOKEN}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", self.address, body.len()).unwrap();
         let mut response = String::new(); stream.read_to_string(&mut response).unwrap();
         let (headers, body) = response.split_once("\r\n\r\n").unwrap();
         let status = headers.lines().next().unwrap().split_whitespace().nth(1).unwrap().parse().unwrap();
@@ -171,4 +174,31 @@ fn endpoint_identifies_duplicate_exact_matches_without_source_text() {
     assert!(!body.contains("private context")); assert!(!body.contains("other"));
     assert_eq!(fs::read_to_string(server.workspace.join("source.txt")).unwrap(), original);
     assert!(!server.workspace.join(".isa").exists());
+}
+
+#[test]
+fn workspace_routes_reject_missing_token_dns_rebinding_and_forwarded_headers() {
+    let server=Server::start(true);let addr=&server.address;
+    let request=|path:&str,host:&str,origin:&str,extra:&str| {
+        let body="{}";let mut stream=TcpStream::connect(addr).unwrap();
+        write!(stream,"POST {path} HTTP/1.1\r\nHost: {host}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len()).unwrap();
+        let mut text=String::new();stream.read_to_string(&mut text).unwrap();text.lines().next().unwrap().split_whitespace().nth(1).unwrap().parse::<u16>().unwrap()
+    };
+    for path in ["/api/edit-preview","/api/edit-proposal","/api/symbols","/api/changes"] {
+        assert_eq!(request(path,addr,&format!("http://{addr}"),""),403);
+        assert_eq!(request(path,addr,&format!("http://{addr}"),"X-ISA-Exec-Token: wrong\r\n"),403);
+        assert_eq!(request(path,"attacker.example:80","http://attacker.example:80",&format!("X-ISA-Exec-Token: {TOKEN}\r\n")),403);
+        assert_eq!(request(path,addr,&format!("http://{addr}"),&format!("X-ISA-Exec-Token: {TOKEN}\r\nX-Forwarded-For: 127.0.0.1\r\n")),403);
+        assert_ne!(request(path,addr,&format!("http://{addr}"),&format!("X-ISA-Exec-Token: {TOKEN}\r\n")),403);
+    }
+}
+
+#[test]
+fn chat_rejects_untrusted_workspace_and_plugin_requests_before_model_access() {
+    let server=Server::with_model(true,true);let origin=format!("http://{}",server.address);
+    for settings in [serde_json::json!({"provider":"ollama","agentLoop":true}),serde_json::json!({"provider":"ollama","pluginsMode":"auto"}),serde_json::json!({"provider":"ollama","agentLoop":false,"pluginsMode":"off"})] {
+        let body=serde_json::json!({"message":"find files","settings":settings}).to_string();
+        let mut stream=TcpStream::connect(&server.address).unwrap();write!(stream,"POST /api/chat HTTP/1.1\r\nHost: {}\r\nOrigin: {origin}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",server.address,body.len()).unwrap();
+        let mut response=String::new();stream.read_to_string(&mut response).unwrap();assert!(response.starts_with("HTTP/1.1 403"));
+    }
 }

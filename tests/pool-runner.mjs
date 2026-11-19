@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import {createPoolRunner, normalizeWorkflow} from '../frontend/src/pool-runner.mjs';
+
+const legacy = normalizeWorkflow({members:['a','b'],edges:[{from:'a',to:'b',type:'manage'}]});
+assert.equal(legacy.nodes.length,2); assert.equal(legacy.edges.length,1);
+const merged = normalizeWorkflow({graph:{nodes:[{id:'one',providerId:'a',type:'agent'},{id:'duplicate',providerId:'a',type:'agent'}],edges:[]}});
+assert.equal(merged.nodes.length,1); assert.match(merged.migrationNotice,/duplicate/);
+const pools = [{id:'team',name:'Team',graph:{nodes:[{id:'one',providerId:'a',type:'agent'}],edges:[]}}];
+let providers = [{id:'a',name:'Provider',systemPrompt:'safe'}];
+const requests = [];
+const runner = createPoolRunner({getPools:()=>pools, getProviders:()=>providers, workflowGraph:normalizeWorkflow, timedCustomRequest:async (...args)=>{requests.push(args);return {text:'done',error:false}}});
+const history=[{role:'user',text:'do the work'}], signal=new AbortController().signal;
+let result = await runner.run('team',history,[],signal,undefined,undefined,undefined,async()=>false);
+assert.equal(result.error,true); assert.match(result.text,/declined/); assert.equal(requests.length,0);
+let authorized=0;
+result=await runner.run('team',history,[],signal,undefined,undefined,undefined,async()=>{authorized++;return true});
+assert.equal(result.error,false); assert.match(result.text,/done/); assert.equal(authorized,1); assert.equal(requests.length,1);
+assert.equal(requests[0][0],'a'); assert.match(requests[0][4].systemPrompt,/untrusted data/);
+providers=[];result=await runner.run('team',history,[],signal);assert.equal(result.error,true); assert.equal(requests.length,1);
+const other=createPoolRunner({getPools:()=>[],getProviders:()=>[],workflowGraph:normalizeWorkflow,timedCustomRequest:()=>{throw Error('unexpected')}});
+assert.equal((await other.run('team',history,[],signal)).error,true);
+console.log('Pool runner module uses injected current state, honors consent, and normalizes workflows');

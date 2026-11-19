@@ -1,8 +1,8 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),{TextEncoder,TextDecoder}=require('node:util');
-const {JSDOM}=require(process.env.JSDOM_PATH||'jsdom');
+const {JSDOM}=require(process.env.JSDOM_PATH||'./ui/node_modules/jsdom');
 (async()=>{
  const calls=[];let fail=false;
- const dom=new JSDOM(fs.readFileSync('index.html','utf8'),{url:'http://localhost:4174',runScripts:'outside-only',pretendToBeVisual:true,beforeParse(w){
+ const dom=new JSDOM(require('./interface-fixture.cjs')(),{url:'http://localhost:4174',runScripts:'outside-only',pretendToBeVisual:true,beforeParse(w){
   w.TextEncoder=TextEncoder;w.TextDecoder=TextDecoder;w.matchMedia=()=>({matches:false,addEventListener(){},removeEventListener(){}});w.ResizeObserver=class{observe(){}disconnect(){}};w.HTMLElement.prototype.scrollIntoView=function(){};w.HTMLDialogElement.prototype.showModal=function(){this.open=true};w.HTMLDialogElement.prototype.close=function(){this.open=false};
   w.localStorage.setItem('isa.customProviders.v1',JSON.stringify([{id:'custom-a',name:'A',model:'m',url:'https://a.example.com/chat'}]));
   w.localStorage.setItem('isa.agentPools.v1',JSON.stringify([{id:'p',name:'Pool',members:['custom-a'],edges:[],graph:{nodes:[{id:'a',providerId:'custom-a',type:'agent'}],edges:[]}}]));

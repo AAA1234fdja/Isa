@@ -1,6 +1,6 @@
-const {JSDOM}=require(process.env.JSDOM_PATH||'jsdom');
+const {JSDOM}=require(process.env.JSDOM_PATH||'./ui/node_modules/jsdom');
 const fs=require('fs'),assert=require('assert');
-const html=fs.readFileSync('index.html','utf8');
+const html=require('./interface-fixture.cjs')();
 const now='2026-01-01T00:00:00.000Z';
 const dom=new JSDOM(html,{url:'http://localhost:4174',runScripts:'outside-only',pretendToBeVisual:true,beforeParse(w){
   w.TextEncoder=TextEncoder;w.TextDecoder=TextDecoder;

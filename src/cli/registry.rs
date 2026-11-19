@@ -98,6 +98,7 @@ fn update(root: &Path, kind: Kind, id: &str, record: &Value) -> Result<()> {
         let mut file = private_options().open(&temp)?;
         file.write_all(&data)?;
         file.sync_all()?;
+        drop(file); // Close the temporary file before replacing the destination.
         fs::rename(&temp, &path)?;
         Ok(())
     })();
@@ -214,5 +215,21 @@ mod tests {
     #[test]
     fn goals_reject_invalid_status() {
         assert!(set_goal_status(Path::new("."), "missing", "running").is_err());
+    }
+}
+
+#[cfg(test)]
+mod windows_file_replacement_tests {
+    use super::*;
+    #[test]
+    fn windows_file_replacement_registry_updates_existing_record() {
+        let root = std::env::temp_dir().join(format!("isa-registry-replace-{}-{}-é", std::process::id(), SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let mut record = json!({"version":1,"id":"test","kind":"goal","text":"first"});
+        create(&root, Kind::Goal, "test", &record).unwrap();
+        record["text"] = json!("second");
+        update(&root, Kind::Goal, "test", &record).unwrap();
+        assert_eq!(read(&root, Kind::Goal, "test").unwrap()["text"], "second");
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -15,6 +15,30 @@ const MAX_TOOLS: usize = 100;
 fn display(value: &Value) -> Result<String> {
     Ok(serde_json::to_string_pretty(value)?.chars().map(|c| if (c.is_control() && c != '\n' && c != '\t') || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}') { '�' } else { c }).collect())
 }
+// Server schemas are untrusted. References (including local references) are
+// refused rather than resolving files/network or risking recursive expansion.
+// A linear-time regex engine intentionally rejects unsupported ECMA patterns.
+fn validate_tool_input(tool: &Value, arguments: &Value) -> Result<()> {
+    if !arguments.is_object() { return Err("tool arguments must be a JSON object".into()); }
+    let schema=tool.get("inputSchema").filter(|v|v.is_object()).ok_or("missing tool input schema")?;
+    if serde_json::to_vec(schema)?.len()>16*1024 { return Err("tool input schema exceeds 16 KiB".into()); }
+    fn inspect(value: &Value, depth: usize, count: &mut usize) -> Result<()> {
+        *count+=1; if depth>32 || *count>2048 { return Err("tool input schema exceeds complexity limits".into()); }
+        match value {
+            Value::Object(map) => for (key,value) in map {
+                if matches!(key.as_str(),"$ref"|"$dynamicRef"|"$recursiveRef"|"$vocabulary") { return Err("schema references and custom vocabularies are not supported".into()); }
+                inspect(value,depth+1,count)?;
+            },
+            Value::Array(items) => for item in items { inspect(item,depth+1,count)?; },
+            _ => (),
+        }
+        Ok(())
+    }
+    inspect(schema,0,&mut 0)?;
+    let validator=jsonschema::options().with_pattern_options(jsonschema::PatternOptions::regex()).build(schema).map_err(|_| "invalid or unsupported tool input schema")?;
+    if !validator.is_valid(arguments) { return Err("tool arguments do not match the input schema".into()); }
+    Ok(())
+}
 fn validate_args(args: &[String]) -> Result<()> {
     if args.is_empty() || args.len() > 64 || args[0].is_empty() || args.iter().any(|a| a.len() > 4096 || a.chars().any(|c| c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'))) { return Err("invalid server command or arguments".into()); }
     Ok(())
@@ -49,7 +73,8 @@ pub fn interactive(root: &Path, action: &str, tool: Option<&str>, arguments: Opt
         if truncated { return Err("tool discovery was incomplete; refusing to select a tool".into()); }
         let matches: Vec<_> = tools.iter().filter(|t| t.get("name").and_then(Value::as_str) == Some(name)).collect();
         if matches.len() != 1 { return Err("tool was not uniquely found in the bounded discovery results".into()); }
-        println!("Discovered tool (server-supplied, not trusted):\n{}\nArguments (schema is not enforced by ISA):\n{}\nThis tool may perform arbitrary actions and transmit data.", display(matches[0])?, display(&input)?);
+        validate_tool_input(matches[0], &input)?;
+        println!("Discovered tool (server-supplied, not trusted):\n{}\nArguments (validated against the untrusted server schema):\n{}\nThis tool may perform arbitrary actions and transmit data.", display(matches[0])?, display(&input)?);
         if !confirm("Call this exact tool with these arguments?")? { return Err("tool call cancelled".into()); }
         let result = client.request("tools/call", json!({"name":name,"arguments":input}))?;
         if !result.get("content").is_some_and(Value::is_array) || result.get("isError").is_some_and(|v| !v.is_boolean()) { return Err("invalid MCP tool result; the tool may already have run".into()); }
@@ -87,6 +112,8 @@ fn validate_proposal(proposal: &Proposal, tools: &[Value]) -> Result<()> {
         Proposal::Call { name, arguments } => {
             if name.is_empty() || name.len() > 128 || name.chars().any(|c| c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) || !arguments.is_object() || serde_json::to_vec(arguments)?.len() > 16 * 1024 { return Err("invalid proposed tool name or arguments".into()); }
             if tools.iter().filter(|tool| tool.get("name").and_then(Value::as_str) == Some(name)).count() != 1 { return Err("proposed tool was not uniquely discovered".into()); }
+            let tool=tools.iter().find(|tool|tool.get("name").and_then(Value::as_str)==Some(name)).ok_or("proposed tool unavailable")?;
+            validate_tool_input(tool,arguments)?;
         }
         Proposal::Decline { reason } => if reason.trim().is_empty() || reason.len() > 4096 { return Err("invalid decline reason".into()); },
     }
@@ -118,7 +145,7 @@ where C: FnMut(&str) -> Result<bool>, M: FnMut(&str) -> Result<String>, S: FnMut
         Proposal::Decline { reason } => println!("Model declined to propose a tool call: {}", display(&json!(reason))?),
         Proposal::Call { name, arguments } => {
             let tool = tools.iter().find(|item| item.get("name").and_then(Value::as_str) == Some(name.as_str())).ok_or("tool disappeared")?;
-            println!("Model-proposed call. Server metadata and model output are untrusted; schema is not enforced by ISA. The tool may perform arbitrary actions and transmit data.\nTool:\n{}\nArguments:\n{}", display(tool)?, display(&arguments)?);
+            println!("Model-proposed call. Server metadata and model output are untrusted; arguments were checked against the untrusted server schema. The tool may perform arbitrary actions and transmit data.\nTool:\n{}\nArguments:\n{}", display(tool)?, display(&arguments)?);
             if !approve("Call this exact tool with these arguments?")? { return Err("tool call cancelled".into()); }
             let result = client.request("tools/call", json!({"name":name,"arguments":arguments}))?;
             if !result.get("content").is_some_and(Value::is_array) || result.get("isError").is_some_and(|v| !v.is_boolean()) { return Err("invalid MCP tool result; the tool may already have run".into()); }
@@ -194,7 +221,7 @@ where C: FnMut(&str) -> Result<bool>, M: FnMut(&str) -> Result<String>, T: FnMut
                 if calls == MAX_LOOP_CALLS { return Err("MCP loop call limit reached; no further call was made".into()); }
                 validate_proposal(&Proposal::Call { name: name.clone(), arguments: arguments.clone() }, tools)?;
                 let tool = tools.iter().find(|v| v.get("name").and_then(Value::as_str) == Some(name.as_str())).ok_or("tool disappeared")?;
-                println!("Proposed call {} of {}. Tool metadata and model output are untrusted; ISA does not enforce the input schema. This may perform arbitrary actions and transmit data.\nTool:\n{}\nArguments:\n{}", calls + 1, MAX_LOOP_CALLS, display(tool)?, display(&arguments)?);
+                println!("Proposed call {} of {}. Tool metadata and model output are untrusted; Arguments passed experimental server-schema validation, which is not a safety guarantee. This may perform arbitrary actions and transmit data.\nTool:\n{}\nArguments:\n{}", calls + 1, MAX_LOOP_CALLS, display(tool)?, display(&arguments)?);
                 if !approve("Call this exact tool with these arguments?")? { return Err("tool call cancelled; previous tool calls are not undone".into()); }
                 let result = call_tool(&name, &arguments).map_err(|e| format!("tool call failed or outcome is unknown; it may have had effects; do not blindly retry: {e}"))?;
                 if !result.get("content").is_some_and(Value::is_array) || result.get("isError").is_some_and(|v| !v.is_boolean()) { return Err("invalid MCP tool result; the tool may already have run".into()); }
@@ -224,8 +251,14 @@ impl WebMcpSession {
         Ok(Self {client,tools})
     }
     pub(crate) fn tools(&self) -> &[Value] { &self.tools }
+    pub(crate) fn validate_call(&self, name: &str, arguments: &Value) -> Result<()> {
+        let mut matches=self.tools.iter().filter(|t|t.get("name").and_then(Value::as_str)==Some(name));
+        let tool=matches.next().ok_or("tool not discovered")?;
+        if matches.next().is_some() { return Err("tool not uniquely discovered".into()); }
+        validate_tool_input(tool,arguments)
+    }
     pub(crate) fn call(&mut self, name: &str, arguments: Value) -> Result<Value> {
-        if self.tools.iter().filter(|t| t.get("name").and_then(Value::as_str)==Some(name)).count()!=1 { return Err("tool not uniquely discovered".into()); }
+        self.validate_call(name,&arguments)?;
         let result=self.client.request("tools/call",json!({"name":name,"arguments":arguments}))?;
         if !result.get("content").is_some_and(Value::is_array) || result.get("isError").is_some_and(|v| !v.is_boolean()) { return Err("invalid MCP result; tool may already have run".into()); }
         Ok(result)
@@ -244,7 +277,7 @@ impl Client {
 }
 
 #[cfg(unix)]
-struct Client { child: std::process::Child, input: std::process::ChildStdin, output: std::process::ChildStdout, buffer: Vec<u8>, received: usize, next_id: u64 }
+struct Client { child: std::process::Child, input: std::process::ChildStdin, output: std::process::ChildStdout, buffer: super::mcp_stdio_buffer::LineBuffer, next_id: u64 }
 #[cfg(unix)]
 impl Client {
     fn start(root: &Path, command: &[String]) -> Result<Self> {
@@ -252,14 +285,14 @@ impl Client {
     }
     fn start_profile(root: &Path, command: &[String], profile: super::web_limits::Profile) -> Result<Self> {
         use std::os::{fd::AsRawFd, unix::process::CommandExt};
-        use std::process::{Command, Stdio};
-        let mut process=Command::new(&command[0]);
-        process.args(&command[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").env_remove("ISA_WEB_MCP_COMMAND").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
+        use std::process::Stdio;
+        let mut process=super::web_limits::command(root,command,profile)?;
+        process.env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").env_remove("ISA_WEB_MCP_COMMAND").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
         super::web_limits::configure(&mut process,profile)?;
         let mut child=process.spawn()?;
         let input = child.stdin.take().expect("piped stdin");
         let output = child.stdout.take().expect("piped stdout");
-        let client = Self { child, input, output, buffer: Vec::new(), received: 0, next_id: 1 };
+        let client = Self { child, input, output, buffer: super::mcp_stdio_buffer::LineBuffer::new(MAX_FRAME,MAX_TOTAL), next_id: 1 };
         for fd in [client.input.as_raw_fd(), client.output.as_raw_fd()] {
             let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
             if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 { return Err(io::Error::last_os_error().into()); }
@@ -279,12 +312,10 @@ impl Client {
     }
     fn send(&mut self, value: &Value, deadline: std::time::Instant) -> Result<()> {
         use std::os::fd::AsRawFd;
-        let mut bytes = serde_json::to_vec(value)?;
-        if bytes.len() > MAX_FRAME { return Err("MCP request exceeds frame limit".into()); }
-        bytes.push(b'\n'); let mut offset = 0;
-        while offset < bytes.len() {
+        let mut frame=super::mcp_stdio_write::Outgoing::new(serde_json::to_vec(value)?,MAX_FRAME)?;
+        while !frame.pending().is_empty() {
             Self::wait(self.input.as_raw_fd(), libc::POLLOUT, deadline)?;
-            match self.input.write(&bytes[offset..]) { Ok(0) => return Err("MCP server closed stdin".into()), Ok(n) => offset += n, Err(e) if matches!(e.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock) => (), Err(e) => return Err(e.into()) }
+            match self.input.write(frame.pending()) { Ok(0) => return Err("MCP server closed stdin".into()), Ok(n) => frame.advance(n)?, Err(e) if matches!(e.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock) => (), Err(e) => return Err(e.into()) }
         }
         Ok(())
     }
@@ -292,19 +323,16 @@ impl Client {
         use std::io::Read;
         use std::os::fd::AsRawFd;
         loop {
-            if let Some(end) = self.buffer.iter().position(|b| *b == b'\n') {
-                if end > MAX_FRAME { return Err("MCP response frame exceeds limit".into()); }
-                let line: Vec<u8> = self.buffer.drain(..=end).collect();
+            if let Some(line) = self.buffer.next_line()? {
                 let value: Value = serde_json::from_slice(&line)?;
                 if value.get("jsonrpc").and_then(Value::as_str) != Some("2.0") || !value.is_object() { return Err("invalid MCP JSON-RPC message".into()); }
                 return Ok(value);
             }
-            if self.buffer.len() > MAX_FRAME { return Err("MCP response frame exceeds limit".into()); }
             Self::wait(self.output.as_raw_fd(), libc::POLLIN, deadline)?;
             let mut buf = [0u8; 4096];
             match self.output.read(&mut buf) {
                 Ok(0) => return Err("MCP server closed stdout".into()),
-                Ok(n) => { self.received = self.received.saturating_add(n); if self.received > MAX_TOTAL { return Err("MCP response budget exceeded".into()); } self.buffer.extend_from_slice(&buf[..n]); },
+                Ok(n) => { self.buffer.push(&buf[..n])?; },
                 Err(e) if matches!(e.kind(), io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock) => (),
                 Err(e) => return Err(e.into()),
             }
@@ -410,6 +438,25 @@ mod tests {
         let result: Value = serde_json::from_slice(&std::fs::read(&marker).unwrap()).unwrap();
         assert_eq!(result["name"], "write"); assert_eq!(result["arguments"]["x"], 1);
         let _ = std::fs::remove_file(&marker); let _ = std::fs::remove_file(format!("{}.started", marker.display()));
+    }
+
+    #[test]
+    fn input_schema_validation_rejects_invalid_or_unsafe_schemas_and_arguments() {
+        let tool=json!({"name":"write","inputSchema":{"type":"object","properties":{"count":{"type":"integer","minimum":1},"name":{"type":"string","pattern":"^[a-z]+$"}},"required":["count","name"],"additionalProperties":false}});
+        assert!(validate_tool_input(&tool,&json!({"count":3,"name":"ok"})).is_ok());
+        for input in [json!({"count":0,"name":"ok"}),json!({"count":1}),json!({"count":1,"name":"BAD"}),json!({"count":1,"name":"ok","extra":true})] { assert!(validate_tool_input(&tool,&input).is_err()); }
+        for schema in [json!({"type":"object","$ref":"file:///etc/passwd"}),json!({"$ref":"#/$defs/node"}),json!({"type":"object","pattern":"(?<=a)b"}),json!({"type":"not-a-type"})] {
+            assert!(validate_tool_input(&json!({"inputSchema":schema}),&json!({})).is_err());
+        }
+        assert!(validate_tool_input(&json!({"inputSchema":{"type":"object","description":"x".repeat(17000)}}),&json!({})).is_err());
+    }
+
+    #[test]
+    fn schema_failure_prevents_model_proposed_tool_dispatch() {
+        let tools=vec![json!({"name":"write","inputSchema":{"type":"object","required":["value"],"properties":{"value":{"type":"string"}}}})];
+        let mut decisions=0; let mut calls=0;
+        let result=run_tool_loop("task","mock",&tools,|_| { decisions+=1;Ok(true) },|_| Ok(r#"{"action":"call","name":"write","arguments":{"value":42}}"#.into()),|_,_| { calls+=1;Ok(json!({"content":[]})) });
+        assert!(result.is_err());assert_eq!(calls,0);assert_eq!(decisions,1);
     }
 
     #[test]
@@ -520,5 +567,14 @@ mod tests {
         assert!(client.receive(std::time::Instant::now() + std::time::Duration::from_millis(150)).is_err());
         assert!(!display(&json!("\u{202e}\u{0085}")).unwrap().contains('\u{202e}'));
         assert!(validate_args(&["node".into(), "\x1b".into()]).is_err());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_fail_closed_tests {
+    use super::*;
+    #[test]
+    fn windows_fail_closed_mcp_does_not_start() {
+        assert!(Client::start(Path::new("."), &["cmd.exe".into()]).is_err());
     }
 }

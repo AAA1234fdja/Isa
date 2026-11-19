@@ -19,9 +19,9 @@ fn tail(text: &str, limit: usize) -> (&str, bool) {
     (&text[start..], true)
 }
 #[derive(Debug)]
-struct TestResult { code: Option<i32>, timed_out: bool, stdout: String, stderr: String, truncated: bool, pipes_incomplete: bool }
+struct TestResult { code: Option<i32>, timed_out: bool, cancelled: bool, stdout: String, stderr: String, truncated: bool, pipes_incomplete: bool }
 impl TestResult {
-    fn success(&self) -> bool { !self.timed_out && !self.pipes_incomplete && self.code == Some(0) }
+    fn success(&self) -> bool { !self.timed_out && !self.cancelled && !self.pipes_incomplete && self.code == Some(0) }
     fn model_task(&self, instruction: &str) -> Result<String> {
         let (out, out_cut) = tail(&self.stdout, MODEL_TAIL);
         let (err, err_cut) = tail(&self.stderr, MODEL_TAIL);
@@ -49,6 +49,8 @@ pub fn interactive(root: &Path, file: &Path, instruction: &str, args: &[String])
     println!("Selected file for any retry: {}", safe_text(&file.display().to_string()));
     println!("Test in workspace {}. Runs with your permissions, without a sandbox; it may change files and access the network. Timeout is best effort; descendants may survive.", safe_text(&root.display().to_string()));
     println!("Program and arguments (no shell is inserted): {}", args.iter().map(|a| serde_json::to_string(a).unwrap_or_default()).collect::<Vec<_>>().join(" "));
+    #[cfg(windows)]
+    println!("Windows feedback is experimental and opt-in. It requires an absolute .exe path and uses a reduced environment containing SystemRoot only. Job Object cancellation is best effort; this is not a sandbox.");
     println!("At most three test runs and two proposals. Each test, model request and edit requires separate approval. Each approved edit replaces the single undo record; stopping does not revert earlier edits.");
     let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_owned());
     cycle_with(root, file, instruction, args, confirm,
@@ -80,21 +82,46 @@ where F: FnMut(&str) -> Result<bool>, T: FnMut(&Path, &[String]) -> Result<TestR
     Err("feedback loop ended unexpectedly".into())
 }
 
-#[cfg(not(unix))]
-fn run_test(_: &Path, _: &[String], _: std::time::Duration) -> Result<TestResult> { Err("feedback test execution is supported on Unix only".into()) }
-#[cfg(not(unix))]
-fn run_test_profile(_: &Path, _: &[String], _: std::time::Duration, _: super::web_limits::Profile) -> Result<TestResult> { Err("feedback test execution is supported on Unix only".into()) }
+#[cfg(not(any(unix,windows)))]
+fn run_test(_: &Path, _: &[String], _: std::time::Duration) -> Result<TestResult> { Err("feedback test execution is not supported on this platform".into()) }
+#[cfg(not(any(unix,windows)))]
+fn run_test_profile(_: &Path, _: &[String], _: std::time::Duration, _: super::web_limits::Profile, _: Option<&std::sync::atomic::AtomicBool>) -> Result<TestResult> { Err("feedback test execution is not supported on this platform".into()) }
+
+// Experimental CLI-only execution: explicit opt-in, direct executable paths,
+// no shell or PATH search, and only the host profile. This is not a sandbox.
+#[cfg(windows)]
+fn run_test(root:&Path,args:&[String],timeout:std::time::Duration)->Result<TestResult> {
+    if std::env::var_os("ISA_WINDOWS_FEEDBACK_EXPERIMENTAL").as_deref()!=Some(std::ffi::OsStr::new("1")) {
+        return Err("Windows feedback execution is experimental and disabled".into());
+    }
+    run_test_profile(root,args,timeout,super::web_limits::Profile::Host,None)
+}
+#[cfg(windows)]
+fn run_test_profile(root:&Path,args:&[String],timeout:std::time::Duration,profile:super::web_limits::Profile,cancel:Option<&std::sync::atomic::AtomicBool>)->Result<TestResult> {
+    use std::{ffi::OsString,sync::atomic::AtomicBool};
+    if profile!=super::web_limits::Profile::Host {return Err("Windows feedback supports only the host profile".into());}
+    let program=args.first().ok_or("missing test executable")?;
+    let path=Path::new(program);
+    if !path.is_absolute() || !path.is_file() || !path.extension().and_then(|s|s.to_str()).is_some_and(|s|s.eq_ignore_ascii_case("exe")) {
+        return Err("Windows feedback requires an absolute path to an existing .exe file".into());
+    }
+    let root=std::fs::canonicalize(root)?;
+    let args:Vec<OsString>=args[1..].iter().map(OsString::from).collect();
+    let unset=AtomicBool::new(false);
+    let result=super::windows_suspended_process::SuspendedProcess::create(path,&args,&root)?.run(timeout,cancel.unwrap_or(&unset))?;
+    Ok(TestResult {code:i32::try_from(result.exit_code).ok(),timed_out:result.timed_out,cancelled:result.cancelled,stdout:safe_text(&String::from_utf8_lossy(&result.stdout)),stderr:safe_text(&String::from_utf8_lossy(&result.stderr)),truncated:result.truncated,pipes_incomplete:result.pipes_incomplete})
+}
 
 #[cfg(unix)]
 fn run_test(root: &Path, args: &[String], timeout: std::time::Duration) -> Result<TestResult> {
-    run_test_profile(root,args,timeout,super::web_limits::Profile::Host)
+    run_test_profile(root,args,timeout,super::web_limits::Profile::Host,None)
 }
 #[cfg(unix)]
-fn run_test_profile(root: &Path, args: &[String], timeout: std::time::Duration, profile: super::web_limits::Profile) -> Result<TestResult> {
+fn run_test_profile(root: &Path, args: &[String], timeout: std::time::Duration, profile: super::web_limits::Profile, cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<TestResult> {
     use std::io::Read;
     use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use std::time::{Duration, Instant};
     struct Guard(std::process::Child);
     impl Drop for Guard { fn drop(&mut self) { if matches!(self.0.try_wait(), Ok(None)) { if let Ok(pid) = i32::try_from(self.0.id()) { unsafe { libc::kill(-pid, libc::SIGKILL); } } let _ = self.0.kill(); let _ = self.0.wait(); } } }
@@ -108,7 +135,7 @@ fn run_test_profile(root: &Path, args: &[String], timeout: std::time::Duration, 
         for _ in 0..16 {
             match stream.read(&mut buf) {
                 Ok(0) => return Ok(true),
-                Ok(n) => { bytes.extend_from_slice(&buf[..n]); if bytes.len() > OUTPUT_LIMIT { bytes.drain(..bytes.len()-OUTPUT_LIMIT); *truncated = true; } },
+                Ok(n) => { *truncated |= super::command_control::append_tail(bytes, &buf[..n], OUTPUT_LIMIT); },
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
                 Err(e) => return Err(e),
@@ -116,19 +143,21 @@ fn run_test_profile(root: &Path, args: &[String], timeout: std::time::Duration, 
         }
         Ok(false)
     }
-    let mut command=Command::new(&args[0]);
-    command.args(&args[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
+    if cancel.is_some_and(|c|c.load(std::sync::atomic::Ordering::SeqCst)) { return Err("command was stopped before starting".into()); }
+    let mut command=super::web_limits::command(root,args,profile)?;
+    command.env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     super::web_limits::configure(&mut command,profile)?;
     let child=command.spawn()?;
     let mut guard = Guard(child); let mut stdout = guard.0.stdout.take().ok_or("stdout unavailable")?; let mut stderr = guard.0.stderr.take().ok_or("stderr unavailable")?;
     nonblock(stdout.as_raw_fd())?; nonblock(stderr.as_raw_fd())?;
-    let deadline = Instant::now() + timeout; let mut out = Vec::new(); let mut err = Vec::new(); let mut truncated = false; let mut out_done = false; let mut err_done = false; let mut timed_out = false;
+    let deadline = Instant::now() + timeout; let mut out = Vec::new(); let mut err = Vec::new(); let mut truncated = false; let mut out_done = false; let mut err_done = false; let mut timed_out = false; let mut cancelled = false;
     let status = loop {
         if !out_done { out_done = drain(&mut stdout, &mut out, &mut truncated)?; }
         if !err_done { err_done = drain(&mut stderr, &mut err, &mut truncated)?; }
         if let Some(status) = guard.0.try_wait()? { break status; }
-        if Instant::now() >= deadline {
-            timed_out = true;
+        if let Some(reason)=super::command_control::stop_reason(cancel.is_some_and(|c|c.load(std::sync::atomic::Ordering::SeqCst)), Instant::now() >= deadline) {
+            cancelled=reason==super::command_control::StopReason::Cancelled;
+            timed_out=reason==super::command_control::StopReason::TimedOut;
             let pid = i32::try_from(guard.0.id())?;
             unsafe { libc::kill(-pid, libc::SIGKILL); }
             let _ = guard.0.kill();
@@ -143,25 +172,34 @@ fn run_test_profile(root: &Path, args: &[String], timeout: std::time::Duration, 
         if !err_done { err_done = drain(&mut stderr, &mut err, &mut truncated)?; }
         if !(out_done && err_done) { std::thread::sleep(Duration::from_millis(10)); }
     }
-    Ok(TestResult { code: status.code(), timed_out, stdout: safe_text(&String::from_utf8_lossy(&out)), stderr: safe_text(&String::from_utf8_lossy(&err)), truncated, pipes_incomplete: !(out_done && err_done) })
+    Ok(TestResult { code: status.code(), timed_out, cancelled, stdout: safe_text(&String::from_utf8_lossy(&out)), stderr: safe_text(&String::from_utf8_lossy(&err)), truncated, pipes_incomplete: !(out_done && err_done) })
 }
 
 // Only called by the opt-in authenticated local web supervisor after policy checks.
-pub fn web_command(root: &Path, command: &str, profile: super::web_limits::Profile) -> Result<serde_json::Value> {
+pub fn web_command(root: &Path, command: &str, profile: super::web_limits::Profile, cancel: &std::sync::atomic::AtomicBool) -> Result<serde_json::Value> {
     if command.trim().is_empty() || command.len() > 4096 || command.chars().any(|c| (c.is_control() && c != '\n' && c != '\t') || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')) { return Err("invalid command".into()); }
-    let result = run_test_profile(root, &["bash".into(), "--noprofile".into(), "--norc".into(), "-c".into(), command.into()], std::time::Duration::from_secs(30), profile)?;
-    Ok(json!({"exitCode":result.code,"timedOut":result.timed_out,"stdout":result.stdout,"stderr":result.stderr,"truncated":result.truncated,"pipesIncomplete":result.pipes_incomplete}))
+    #[cfg(windows)]
+    {
+        if !super::windows_supervision_gate::shell_enabled() || profile!=super::web_limits::Profile::Host {return Err("experimental Windows shell is unavailable".into());}
+        let result=super::windows_powershell::run(root,command,std::time::Duration::from_secs(30),cancel)?;
+        return Ok(json!({"exitCode":i32::try_from(result.exit_code).ok(),"timedOut":result.timed_out,"cancelled":result.cancelled,"stdout":safe_text(&String::from_utf8_lossy(&result.stdout)),"stderr":safe_text(&String::from_utf8_lossy(&result.stderr)),"truncated":result.truncated,"pipesIncomplete":result.pipes_incomplete}));
+    }
+    #[cfg(not(windows))]
+    {
+        let result = run_test_profile(root, &["bash".into(), "--noprofile".into(), "--norc".into(), "-c".into(), command.into()], std::time::Duration::from_secs(30), profile,Some(cancel))?;
+        Ok(json!({"exitCode":result.code,"timedOut":result.timed_out,"cancelled":result.cancelled,"stdout":result.stdout,"stderr":result.stderr,"truncated":result.truncated,"pipesIncomplete":result.pipes_incomplete}))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test] fn diagnostics_are_bounded_and_marked_untrusted() {
-        let result = TestResult { code: Some(1), timed_out: false, stdout: "x".repeat(1000), stderr: "failure".into(), truncated: false, pipes_incomplete: false };
+        let result = TestResult { code: Some(1), timed_out: false, cancelled: false, stdout: "x".repeat(1000), stderr: "failure".into(), truncated: false, pipes_incomplete: false };
         let task = result.model_task("fix bug").unwrap(); assert!(task.contains("untrusted test output")); assert!(task.contains("\"output_incomplete\":true")); assert!(task.len() < 4000);
         assert!(!safe_text("\x1b[31m\u{202e}").contains('\x1b'));
     }
-    fn failure() -> TestResult { TestResult { code: Some(1), timed_out: false, stdout: String::new(), stderr: "assertion failed".into(), truncated: false, pipes_incomplete: false } }
+    fn failure() -> TestResult { TestResult { code: Some(1), timed_out: false, cancelled: false, stdout: String::new(), stderr: "assertion failed".into(), truncated: false, pipes_incomplete: false } }
     #[cfg(unix)]
     #[test] fn bounded_cycle_applies_only_after_approval_and_reruns() {
         use std::cell::Cell;
@@ -210,5 +248,42 @@ mod tests {
         assert_eq!(result.code, Some(3)); assert_eq!(result.stdout, "hello"); assert_eq!(result.stderr, "failure"); assert!(!result.success());
         let args = vec!["sh".into(), "-c".into(), "sleep 5".into()];
         assert!(run_test(&root, &args, std::time::Duration::from_millis(80)).unwrap().timed_out);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_fail_closed_tests {
+    use super::*;
+    #[test]
+    fn windows_fail_closed_feedback_does_not_start() {
+        assert!(run_test(Path::new("."), &["cmd.exe".into()], std::time::Duration::from_secs(1)).is_err());
+    }
+}
+
+#[cfg(all(test,windows))]
+mod windows_feedback_experimental_tests {
+    use super::*;
+    use std::{sync::{Arc,atomic::{AtomicBool,Ordering}},time::Duration};
+    fn args(script:&str)->Vec<String> {
+        vec![super::super::windows_powershell::powershell_path().unwrap().to_string_lossy().into_owned(),"-NoProfile".into(),"-NonInteractive".into(),"-Command".into(),script.into()]
+    }
+    #[test]
+    fn windows_feedback_experimental_captures_output_and_bounds_it() {
+        let result=run_test_profile(&std::env::temp_dir(),&args("[Console]::Out.Write(('x' * 12000) + 'END'); [Console]::Error.Write('error'); exit 7"),Duration::from_secs(15),super::super::web_limits::Profile::Host,None).unwrap();
+        assert_eq!(result.code,Some(7));assert!(!result.timed_out && !result.cancelled);assert!(result.truncated);assert!(result.stdout.ends_with("END"));assert!(result.stderr.contains("error"));
+    }
+    #[test]
+    fn windows_feedback_experimental_timeout_and_cancel() {
+        let result=run_test_profile(&std::env::temp_dir(),&args("Start-Sleep -Seconds 30"),Duration::from_millis(200),super::super::web_limits::Profile::Host,None).unwrap();assert!(result.timed_out);
+        let cancel=Arc::new(AtomicBool::new(false));let signal=cancel.clone();
+        let waiter=std::thread::spawn(move || {std::thread::sleep(Duration::from_millis(300));signal.store(true,Ordering::SeqCst);});
+        let result=run_test_profile(&std::env::temp_dir(),&args("Start-Sleep -Seconds 30"),Duration::from_secs(15),super::super::web_limits::Profile::Host,Some(&cancel)).unwrap();
+        waiter.join().unwrap();assert!(result.cancelled);assert!(!result.timed_out);
+    }
+    #[test]
+    fn windows_feedback_experimental_rejects_relative_and_precancelled() {
+        assert!(run_test_profile(&std::env::temp_dir(),&["relative.exe".into()],Duration::from_secs(1),super::super::web_limits::Profile::Host,None).is_err());
+        let cancel=AtomicBool::new(true);
+        assert!(run_test_profile(&std::env::temp_dir(),&args("exit 0"),Duration::from_secs(1),super::super::web_limits::Profile::Host,Some(&cancel)).is_err());
     }
 }
