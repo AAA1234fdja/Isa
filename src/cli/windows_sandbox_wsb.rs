@@ -27,18 +27,21 @@ mod tests {
     #[test]
     fn diagnostic_wsb_is_fixed_and_explicit_without_shares_or_commands() {
         let config = diagnostic_configuration();
-        assert_eq!(config, concat!(
-            "<Configuration>\n",
-            "<vGPU>Disable</vGPU>\n",
-            "<Networking>Enable</Networking>\n",
-            "<AudioInput>Disable</AudioInput>\n",
-            "<VideoInput>Disable</VideoInput>\n",
-            "<ProtectedClient>Enable</ProtectedClient>\n",
-            "<PrinterRedirection>Disable</PrinterRedirection>\n",
-            "<ClipboardRedirection>Disable</ClipboardRedirection>\n",
-            "<MemoryInMB>4096</MemoryInMB>\n",
-            "</Configuration>\n",
-        ));
+        assert_eq!(
+            config,
+            concat!(
+                "<Configuration>\n",
+                "<vGPU>Disable</vGPU>\n",
+                "<Networking>Enable</Networking>\n",
+                "<AudioInput>Disable</AudioInput>\n",
+                "<VideoInput>Disable</VideoInput>\n",
+                "<ProtectedClient>Enable</ProtectedClient>\n",
+                "<PrinterRedirection>Disable</PrinterRedirection>\n",
+                "<ClipboardRedirection>Disable</ClipboardRedirection>\n",
+                "<MemoryInMB>4096</MemoryInMB>\n",
+                "</Configuration>\n",
+            )
+        );
         assert!(!config.contains("MappedFolders"));
         assert!(!config.contains("LogonCommand"));
     }

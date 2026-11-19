@@ -1,40 +1,39 @@
-#[path = "../harness/mod.rs"]
-mod harness;
-#[path = "../skills/mod.rs"]
-mod skills;
+mod agent_loop;
+mod command_control;
 mod connectors;
 mod context;
-mod agent_loop;
-mod semantic;
 mod edit;
 mod edit_path_guard;
 mod edit_transaction;
-mod web_undo_store;
-#[allow(dead_code)]
-#[path = "../web_audit_crypto.rs"] mod web_audit_crypto;
 mod feedback;
-mod command_control;
-#[cfg(windows)]
-#[allow(dead_code)]
-#[path = "../windows_supervision_gate.rs"]
-mod windows_supervision_gate;
-#[allow(dead_code)]
-mod windows_command_line;
-#[allow(dead_code)]
-mod windows_acl_policy;
-#[allow(dead_code)]
-mod windows_undo_frame;
+#[path = "../harness/mod.rs"]
+mod harness;
+mod mcp;
+mod mcp_stdio_buffer;
+mod mcp_stdio_write;
 #[allow(dead_code)]
 mod powershell_command;
+mod semantic;
+#[path = "../skills/mod.rs"]
+mod skills;
+#[allow(dead_code)]
+#[path = "../web_audit_crypto.rs"]
+mod web_audit_crypto;
+mod web_limits;
+mod web_undo_store;
+#[allow(dead_code)]
+mod windows_acl_policy;
+#[cfg(windows)]
+#[allow(dead_code)]
+pub(crate) mod windows_audit_store;
+#[allow(dead_code)]
+mod windows_command_line;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_file_identity;
 #[cfg(windows)]
 #[allow(dead_code)]
 mod windows_job;
-#[cfg(windows)]
-#[allow(dead_code)]
-mod windows_suspended_process;
-#[cfg(windows)]
-#[allow(dead_code)]
-mod windows_pipe;
 #[cfg(windows)]
 #[allow(dead_code)]
 mod windows_mcp_pipe;
@@ -43,44 +42,46 @@ mod windows_mcp_pipe;
 mod windows_mcp_write;
 #[cfg(windows)]
 #[allow(dead_code)]
-mod windows_process_attributes;
+mod windows_pipe;
 #[cfg(windows)]
 #[allow(dead_code)]
 mod windows_powershell;
 #[cfg(windows)]
 #[allow(dead_code)]
-mod windows_file_identity;
-#[cfg(windows)]
-#[allow(dead_code)]
 mod windows_private_acl;
 #[cfg(windows)]
 #[allow(dead_code)]
-mod windows_undo_store;
+mod windows_process_attributes;
 #[cfg(windows)]
 #[allow(dead_code)]
-pub(crate) mod windows_audit_store;
-mod mcp;
-mod mcp_stdio_buffer;
-mod mcp_stdio_write;
-mod web_limits;
+#[path = "../windows_supervision_gate.rs"]
+mod windows_supervision_gate;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_suspended_process;
+#[allow(dead_code)]
+mod windows_undo_frame;
+#[cfg(windows)]
+#[allow(dead_code)]
+mod windows_undo_store;
 // Staged sandbox planning is compiled only in tests; it cannot execute or copy.
-#[cfg(test)]
-mod windows_sandbox_manifest;
-#[cfg(test)]
-mod windows_sandbox_export_plan;
-#[cfg(test)]
-mod windows_sandbox_import_plan;
-#[cfg(test)]
-mod windows_sandbox_frame;
-#[cfg(test)]
-mod windows_sandbox_wsb;
+mod processes;
 mod registry;
 mod repository;
 mod repository_filter;
-mod processes;
 mod session;
-mod symbols;
 mod summary;
+mod symbols;
+#[cfg(test)]
+mod windows_sandbox_export_plan;
+#[cfg(test)]
+mod windows_sandbox_frame;
+#[cfg(test)]
+mod windows_sandbox_import_plan;
+#[cfg(test)]
+mod windows_sandbox_manifest;
+#[cfg(test)]
+mod windows_sandbox_wsb;
 mod work;
 
 use std::error::Error;
@@ -186,15 +187,30 @@ pub fn run(args: Vec<String>) -> Result<()> {
             print!("{}", repository::git_diff(&root, staged)?);
         }
         Some("audit-key") => {
-            if args.get(1).map(String::as_str)!=Some("init") || args.len()>3 { return Err("usage: isa-cli audit-key init [directory]".into()); }
-            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {return Err("audit key initialization requires an interactive terminal".into());}
-            let root=directory(&args,2)?;
+            if args.get(1).map(String::as_str) != Some("init") || args.len() > 3 {
+                return Err("usage: isa-cli audit-key init [directory]".into());
+            }
+            if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+                return Err("audit key initialization requires an interactive terminal".into());
+            }
+            let root = directory(&args, 2)?;
             println!("Initialize a new audit encryption key in the OS credential store for {}?\nIf the key is lost, encrypted audit records cannot be recovered. Existing keys are never replaced. Use only one initializer at a time. Type yes to continue:",root.display());
-            io::stdout().flush()?;let mut answer=String::new();io::stdin().read_line(&mut answer)?;
-            if answer.trim()!="yes" {return Err("Audit key initialization cancelled".into());}
-            web_audit_crypto::initialize(&root)?;println!("Audit key initialized. No key material was displayed.");
+            io::stdout().flush()?;
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            if answer.trim() != "yes" {
+                return Err("Audit key initialization cancelled".into());
+            }
+            web_audit_crypto::initialize(&root)?;
+            println!("Audit key initialized. No key material was displayed.");
         }
-        Some("processes") => { if args.len() > 2 { return Err("usage: isa-cli processes [directory]".into()); } let root = directory(&args, 1)?; processes::interactive(&root)?; }
+        Some("processes") => {
+            if args.len() > 2 {
+                return Err("usage: isa-cli processes [directory]".into());
+            }
+            let root = directory(&args, 1)?;
+            processes::interactive(&root)?;
+        }
         Some("mcp") => {
             let action = argument(&args, 1, "MCP action")?;
             let root = directory(&args, args.len())?;
@@ -216,9 +232,15 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some("harness-eval") => {
             let suite = argument(&args, 1, "suite file")?;
             let mode = argument(&args, 2, "mode: quick, balanced, or thorough")?;
-            if args.len() != 3 { return Err("usage: isa-cli harness-eval <suite.json> <quick|balanced|thorough>".into()); }
+            if args.len() != 3 {
+                return Err(
+                    "usage: isa-cli harness-eval <suite.json> <quick|balanced|thorough>".into(),
+                );
+            }
             let model = std::env::var("ISA_MODEL").unwrap_or_else(|_| "llama3.2".to_string());
-            if !harness::evaluate(std::path::Path::new(&suite), &model, &mode)? { return Err("one or more harness evaluation cases failed".into()); }
+            if !harness::evaluate(std::path::Path::new(&suite), &model, &mode)? {
+                return Err("one or more harness evaluation cases failed".into());
+            }
         }
         Some("semantic-index") => {
             let model = argument(&args, 1, "embedding model")?;
@@ -228,24 +250,38 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some("semantic-search") => {
             let query = argument(&args, 1, "query")?;
             let root = directory(&args, 2)?;
-            println!("{}", serde_json::to_string_pretty(&semantic::search(&root, &query)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&semantic::search(&root, &query)?)?
+            );
         }
         Some("rank") => {
             let query = argument(&args, 1, "query")?;
             let root = directory(&args, 2)?;
             for result in context::rank(&root, &query, 20)? {
-                println!("{} ({:.3})\n{}\n", result.path.display(), result.score, result.excerpt);
+                println!(
+                    "{} ({:.3})\n{}\n",
+                    result.path.display(),
+                    result.score,
+                    result.excerpt
+                );
             }
         }
         Some("callers") => {
             let query = argument(&args, 1, "call name")?;
             let root = directory(&args, 2)?;
-            println!("{}", serde_json::to_string_pretty(&symbols::callers(&root, &query)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&symbols::callers(&root, &query)?)?
+            );
         }
         Some("symbols") => {
             let query = argument(&args, 1, "symbol name")?;
             let root = directory(&args, 2)?;
-            println!("{}", serde_json::to_string_pretty(&symbols::lookup(&root, &query)?)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&symbols::lookup(&root, &query)?)?
+            );
         }
         Some("pack") => {
             let query = argument(&args, 1, "query")?;
@@ -263,12 +299,18 @@ pub fn run(args: Vec<String>) -> Result<()> {
         Some("feedback") => {
             let file = argument(&args, 1, "file")?;
             let instruction = argument(&args, 2, "instruction")?;
-            if args.get(3).map(String::as_str) != Some("--") || args.len() < 5 { return Err("usage: isa-cli feedback <file> <instruction> -- <program> [args...]".into()); }
+            if args.get(3).map(String::as_str) != Some("--") || args.len() < 5 {
+                return Err(
+                    "usage: isa-cli feedback <file> <instruction> -- <program> [args...]".into(),
+                );
+            }
             let root = directory(&args, args.len())?;
             feedback::interactive(&root, std::path::Path::new(&file), &instruction, &args[4..])?;
         }
         Some("check-edit") => {
-            if args.len() > 3 { return Err("usage: isa-cli check-edit <proposal-file> [directory]".into()); }
+            if args.len() > 3 {
+                return Err("usage: isa-cli check-edit <proposal-file> [directory]".into());
+            }
             let proposal = argument(&args, 1, "proposal file")?;
             let root = directory(&args, 2)?;
             let review = edit::check_proposal(&root, std::path::Path::new(&proposal))?;
@@ -280,7 +322,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
             edit::apply_proposal(&root, std::path::Path::new(&proposal))?;
         }
         Some("propose-edit") => {
-            if args.len() > 4 { return Err("usage: isa-cli propose-edit <file> <instruction> [directory]".into()); }
+            if args.len() > 4 {
+                return Err("usage: isa-cli propose-edit <file> <instruction> [directory]".into());
+            }
             let file = argument(&args, 1, "file")?;
             let instruction = argument(&args, 2, "instruction")?;
             let root = directory(&args, 3)?;
@@ -292,7 +336,9 @@ pub fn run(args: Vec<String>) -> Result<()> {
             edit::undo(&root)?;
         }
         Some("connector") => {
-            if args.get(1).map(String::as_str) != Some("github") { return Err("only GitHub CLI authorization is implemented; Google Drive, Gmail, and Notion are not connected yet".into()); }
+            if args.get(1).map(String::as_str) != Some("github") {
+                return Err("only GitHub CLI authorization is implemented; Google Drive, Gmail, and Notion are not connected yet".into());
+            }
             match args.get(2).map(String::as_str) {
                 Some("connect") => connectors::connect_github()?,
                 Some("status") => connectors::github_status()?,
@@ -300,19 +346,35 @@ pub fn run(args: Vec<String>) -> Result<()> {
                 Some("disable") => connectors::set_github_enabled(false)?,
                 Some("whoami") => connectors::github_whoami()?,
                 Some("disconnect") => connectors::disconnect_github()?,
-                _ => return Err("usage: connector github <connect|status|enable|disable|whoami|disconnect>".into()),
+                _ => {
+                    return Err(
+                        "usage: connector github <connect|status|enable|disable|whoami|disconnect>"
+                            .into(),
+                    )
+                }
             }
         }
         Some("work") => {
             let action = argument(&args, 1, "work action")?;
             let root = directory(&args, 2)?;
             match action.as_str() {
-                "start" => { work::start(&root)?; println!("Work started. Existing files are the baseline."); }
+                "start" => {
+                    work::start(&root)?;
+                    println!("Work started. Existing files are the baseline.");
+                }
                 "status" => {
                     let status = work::status(&root)?;
-                    println!("{}", serde_json::to_string_pretty(&serde_json::json!({"added":status.added,"removed":status.removed,"changed_files":status.changed_files,"skipped_files":status.skipped_files}))?);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(
+                            &serde_json::json!({"added":status.added,"removed":status.removed,"changed_files":status.changed_files,"skipped_files":status.skipped_files})
+                        )?
+                    );
                 }
-                "end" => { work::end(&root)?; println!("Work ended; baseline removed."); }
+                "end" => {
+                    work::end(&root)?;
+                    println!("Work ended; baseline removed.");
+                }
                 _ => return Err("usage: work <start|status|end> [directory]".into()),
             }
         }
@@ -490,7 +552,13 @@ fn chat(root: &std::path::Path, id: &str, model: &str) -> Result<()> {
             println!("Commands: ./help/. shows this help; ./resume-AC/. shows the all-chat summary; ./resume-LP/. shows the latest-prompt summary; /quit exits. These commands do not add messages to the session. Summaries are generated after completed model responses.");
             continue;
         }
-        let variant = if input.eq_ignore_ascii_case("./resume-AC/.") { Some(summary::Variant::AllChat) } else if input.eq_ignore_ascii_case("./resume-LP/.") { Some(summary::Variant::LastPrompt) } else { None };
+        let variant = if input.eq_ignore_ascii_case("./resume-AC/.") {
+            Some(summary::Variant::AllChat)
+        } else if input.eq_ignore_ascii_case("./resume-LP/.") {
+            Some(summary::Variant::LastPrompt)
+        } else {
+            None
+        };
         if let Some(variant) = variant {
             match summary::read(root, id, variant) {
                 Ok(text) => println!("{text}"),
@@ -508,9 +576,19 @@ fn chat(root: &std::path::Path, id: &str, model: &str) -> Result<()> {
     Ok(())
 }
 
-fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<session::Message>, input: &str) -> Result<()> {
-    if input.trim().is_empty() { return Err("message must not be empty".into()); }
-    if input.len() > 64 * 1024 { return Err("message exceeds the 64 KiB limit".into()); }
+fn run_turn(
+    root: &std::path::Path,
+    id: &str,
+    model: &str,
+    messages: &mut Vec<session::Message>,
+    input: &str,
+) -> Result<()> {
+    if input.trim().is_empty() {
+        return Err("message must not be empty".into());
+    }
+    if input.len() > 64 * 1024 {
+        return Err("message exceeds the 64 KiB limit".into());
+    }
     messages.push(session::Message::new("user", input));
     if let Err(error) = session::save(root, id, messages) {
         messages.pop();
@@ -520,16 +598,29 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
     let display = |chunk: &str| -> Result<()> {
         let safe;
         let displayed = if terminal {
-            safe = chunk.chars().map(|c| if c == '\n' || c == '\t' || !c.is_control() { c } else { '�' }).collect::<String>();
+            safe = chunk
+                .chars()
+                .map(|c| {
+                    if c == '\n' || c == '\t' || !c.is_control() {
+                        c
+                    } else {
+                        '�'
+                    }
+                })
+                .collect::<String>();
             safe.as_str()
-        } else { chunk };
+        } else {
+            chunk
+        };
         print!("{displayed}");
         io::stdout().flush()?;
         Ok(())
     };
     let reply = if std::env::var("ISA_AGENT_LOOP").as_deref() == Ok("1") {
         let outcome = agent_loop::run(root, model, messages)?;
-        for step in &outcome.steps { eprintln!("ISA agent loop: {}", step); }
+        for step in &outcome.steps {
+            eprintln!("ISA agent loop: {}", step);
+        }
         display(&outcome.answer)?;
         outcome.answer
     } else if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
@@ -552,49 +643,137 @@ fn run_turn(root: &std::path::Path, id: &str, model: &str, messages: &mut Vec<se
 }
 
 // Accounting is scoped to the server request's thread and includes nested harness calls.
-pub fn track_web_usage<T>(work: impl FnOnce() -> Result<T>) -> (Result<T>, Vec<Option<serde_json::Value>>) {
+pub fn track_web_usage<T>(
+    work: impl FnOnce() -> Result<T>,
+) -> (Result<T>, Vec<Option<serde_json::Value>>) {
     session::track_usage(work)
 }
 
 // This loop is separately opted in and is restricted to read-only workspace search.
-pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<(String, Vec<serde_json::Value>)> {
-    let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
-    if let Some(last) = messages.last_mut() { last.images = images; }
+pub fn web_agent_loop(
+    root: &std::path::Path,
+    model: &str,
+    entries: &[(String, String)],
+    images: Vec<String>,
+) -> Result<(String, Vec<serde_json::Value>)> {
+    let mut messages: Vec<_> = entries
+        .iter()
+        .map(|(role, content)| session::Message::new(role, content))
+        .collect();
+    if let Some(last) = messages.last_mut() {
+        last.images = images;
+    }
     let outcome = agent_loop::run(root, model, &messages)?;
     Ok((outcome.answer, outcome.steps))
 }
 
-pub(crate) fn web_work_start(root: &std::path::Path) -> Result<serde_json::Value> { work::web_start(root) }
-pub(crate) fn web_work_status(root: &std::path::Path) -> Result<serde_json::Value> { work::web_status(root) }
-pub(crate) fn web_work_prepare_end(root: &std::path::Path) -> Result<String> { work::web_prepare_end(root) }
-pub(crate) fn web_work_end(root: &std::path::Path, snapshot:&str) -> Result<serde_json::Value> { work::web_end(root,snapshot) }
-pub(crate) fn web_semantic_search(root: &std::path::Path, query: &str) -> Result<serde_json::Value> { semantic::search(root,query) }
-pub(crate) fn web_list_sessions(root: &std::path::Path) -> Result<serde_json::Value> { session::web_list(root) }
-pub(crate) fn web_read_session(root: &std::path::Path, id: &str) -> Result<serde_json::Value> { session::web_read(root,id) }
+pub(crate) fn web_work_start(root: &std::path::Path) -> Result<serde_json::Value> {
+    work::web_start(root)
+}
+pub(crate) fn web_work_status(root: &std::path::Path) -> Result<serde_json::Value> {
+    work::web_status(root)
+}
+pub(crate) fn web_work_prepare_end(root: &std::path::Path) -> Result<String> {
+    work::web_prepare_end(root)
+}
+pub(crate) fn web_work_end(root: &std::path::Path, snapshot: &str) -> Result<serde_json::Value> {
+    work::web_end(root, snapshot)
+}
+pub(crate) fn web_semantic_search(
+    root: &std::path::Path,
+    query: &str,
+) -> Result<serde_json::Value> {
+    semantic::search(root, query)
+}
+pub(crate) fn web_list_sessions(root: &std::path::Path) -> Result<serde_json::Value> {
+    session::web_list(root)
+}
+pub(crate) fn web_read_session(root: &std::path::Path, id: &str) -> Result<serde_json::Value> {
+    session::web_read(root, id)
+}
 
-pub(crate) fn web_prepare_apply(root: &std::path::Path, proposal: &str) -> Result<(serde_json::Value, String)> {
+pub(crate) fn web_prepare_apply(
+    root: &std::path::Path,
+    proposal: &str,
+) -> Result<(serde_json::Value, String)> {
     edit::web_prepare_apply(root, proposal)
 }
-pub(crate) fn web_prepare_transaction(root: &std::path::Path, proposals: &[String]) -> Result<(serde_json::Value, Vec<String>)> { edit::web_prepare_transaction(root, proposals) }
-pub(crate) fn web_apply_transaction<F: FnOnce(&WebTransactionUndo)->Result<()>>(root: &std::path::Path, proposals: &[String], snapshots: &[String], persist:F) -> edit_transaction::Outcome { edit::web_apply_transaction(root, proposals, snapshots, persist) }
+pub(crate) fn web_prepare_transaction(
+    root: &std::path::Path,
+    proposals: &[String],
+) -> Result<(serde_json::Value, Vec<String>)> {
+    edit::web_prepare_transaction(root, proposals)
+}
+pub(crate) fn web_apply_transaction<F: FnOnce(&WebTransactionUndo) -> Result<()>>(
+    root: &std::path::Path,
+    proposals: &[String],
+    snapshots: &[String],
+    persist: F,
+) -> edit_transaction::Outcome {
+    edit::web_apply_transaction(root, proposals, snapshots, persist)
+}
 pub(crate) use edit::WebTransactionUndo;
-pub(crate) fn web_prepare_transaction_undo(root: &std::path::Path, undo: &WebTransactionUndo) -> Result<(serde_json::Value,Vec<String>)> { edit::web_prepare_transaction_undo(root,undo) }
-pub(crate) fn web_apply_transaction_undo(root: &std::path::Path, undo: &WebTransactionUndo, snapshots:&[String]) -> (edit_transaction::Outcome,bool) { edit::web_apply_transaction_undo(root,undo,snapshots) }
-pub(crate) use edit_transaction::Outcome as WebTransactionOutcome;
+pub(crate) fn web_prepare_transaction_undo(
+    root: &std::path::Path,
+    undo: &WebTransactionUndo,
+) -> Result<(serde_json::Value, Vec<String>)> {
+    edit::web_prepare_transaction_undo(root, undo)
+}
+pub(crate) fn web_apply_transaction_undo(
+    root: &std::path::Path,
+    undo: &WebTransactionUndo,
+    snapshots: &[String],
+) -> (edit_transaction::Outcome, bool) {
+    edit::web_apply_transaction_undo(root, undo, snapshots)
+}
 pub(crate) use edit::WebEditUndo;
-pub(crate) fn web_apply_prepared<F: FnOnce(&WebEditUndo)->Result<()>>(root: &std::path::Path, proposal: &str, snapshot: &str, persist:F) -> Result<serde_json::Value> { edit::web_apply_prepared_with(root, proposal, snapshot,persist) }
-pub(crate) use web_undo_store::{save as save_web_undo, load as load_web_undo};
-pub(crate) fn web_prepare_undo(root: &std::path::Path, undo: &WebEditUndo) -> Result<(serde_json::Value,String)> { edit::web_prepare_undo(root, undo) }
-pub(crate) fn web_apply_undo(root: &std::path::Path, undo: &WebEditUndo, snapshot:&str) -> Result<serde_json::Value> { edit::web_apply_undo(root, undo,snapshot) }
+pub(crate) use edit_transaction::Outcome as WebTransactionOutcome;
+pub(crate) fn web_apply_prepared<F: FnOnce(&WebEditUndo) -> Result<()>>(
+    root: &std::path::Path,
+    proposal: &str,
+    snapshot: &str,
+    persist: F,
+) -> Result<serde_json::Value> {
+    edit::web_apply_prepared_with(root, proposal, snapshot, persist)
+}
+pub(crate) use web_undo_store::{load as load_web_undo, save as save_web_undo};
+pub(crate) fn web_prepare_undo(
+    root: &std::path::Path,
+    undo: &WebEditUndo,
+) -> Result<(serde_json::Value, String)> {
+    edit::web_prepare_undo(root, undo)
+}
+pub(crate) fn web_apply_undo(
+    root: &std::path::Path,
+    undo: &WebEditUndo,
+    snapshot: &str,
+) -> Result<serde_json::Value> {
+    edit::web_apply_undo(root, undo, snapshot)
+}
 
-pub(crate) fn web_run_command(root: &std::path::Path, command: &str, profile: WebExecutionProfile, cancel: &std::sync::atomic::AtomicBool) -> Result<serde_json::Value> {
+pub(crate) fn web_run_command(
+    root: &std::path::Path,
+    command: &str,
+    profile: WebExecutionProfile,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<serde_json::Value> {
     feedback::web_command(root, command, profile, cancel)
 }
 
 // The browser server passes only validated conversation roles to this entry point.
-pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, String)], images: Vec<String>) -> Result<String> {
-    let mut messages: Vec<_> = entries.iter().map(|(role, content)| session::Message::new(role, content)).collect();
-    if let Some(last) = messages.last_mut() { last.images = images; }
+pub fn web_response(
+    root: &std::path::Path,
+    model: &str,
+    entries: &[(String, String)],
+    images: Vec<String>,
+) -> Result<String> {
+    let mut messages: Vec<_> = entries
+        .iter()
+        .map(|(role, content)| session::Message::new(role, content))
+        .collect();
+    if let Some(last) = messages.last_mut() {
+        last.images = images;
+    }
     if std::env::var("ISA_HARNESS").as_deref() == Ok("0") {
         session::ollama_stream(model, &messages, |_| Ok(()))
     } else {
@@ -602,11 +781,19 @@ pub fn web_response(root: &std::path::Path, model: &str, entries: &[(String, Str
     }
 }
 
-pub fn web_propose_edit(root: &std::path::Path, file: &str, task: &str, model: &str) -> Result<String> {
+pub fn web_propose_edit(
+    root: &std::path::Path,
+    file: &str,
+    task: &str,
+    model: &str,
+) -> Result<String> {
     edit::web_propose(root, std::path::Path::new(file), task, model)
 }
 
-pub fn web_preview_edit(root: &std::path::Path, proposal: &str) -> std::result::Result<serde_json::Value, serde_json::Value> {
+pub fn web_preview_edit(
+    root: &std::path::Path,
+    proposal: &str,
+) -> std::result::Result<serde_json::Value, serde_json::Value> {
     edit::preview_proposal(root, proposal).map_err(|error| error.json())
 }
 
@@ -632,15 +819,37 @@ mod web_changes_tests {
     use std::process::Command;
     #[test]
     fn reports_real_staged_and_unstaged_changes() {
-        let dir = std::env::temp_dir().join(format!("isa-web-diff-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let dir = std::env::temp_dir().join(format!(
+            "isa-web-diff-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
         std::fs::create_dir(&dir).unwrap();
         let git = |args: &[&str]| {
-            let result = Command::new("git").current_dir(&dir).env("GIT_CONFIG_NOSYSTEM", "1").env("GIT_CONFIG_GLOBAL", "/dev/null").args(args).output().unwrap();
-            assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+            let result = Command::new("git")
+                .current_dir(&dir)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
         };
-        git(&["init", "-q"]); git(&["config", "user.name", "ISA Test"]); git(&["config", "user.email", "test@example.invalid"]);
-        std::fs::write(dir.join("file.txt"), "original\n").unwrap(); git(&["add", "file.txt"]); git(&["commit", "-qm", "initial"]);
-        std::fs::write(dir.join("file.txt"), "staged\n").unwrap(); git(&["add", "file.txt"]);
+        git(&["init", "-q"]);
+        git(&["config", "user.name", "ISA Test"]);
+        git(&["config", "user.email", "test@example.invalid"]);
+        std::fs::write(dir.join("file.txt"), "original\n").unwrap();
+        git(&["add", "file.txt"]);
+        git(&["commit", "-qm", "initial"]);
+        std::fs::write(dir.join("file.txt"), "staged\n").unwrap();
+        git(&["add", "file.txt"]);
         std::fs::write(dir.join("file.txt"), "unstaged\n").unwrap();
         std::fs::write(dir.join("untracked.txt"), "not included\n").unwrap();
         let data = web_changes(&dir).unwrap();
