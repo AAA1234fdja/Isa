@@ -29,6 +29,8 @@ jobs:
           node tests/pool-stream.cjs
           node tests/pool-stream-ui.cjs
           node tests/provider-budget-ui.cjs
+          node tests/agents-workspace.cjs
+          node tests/project-workspace.cjs
           node tests/web-supervision.cjs
       - name: Run Rust tests
         env:
