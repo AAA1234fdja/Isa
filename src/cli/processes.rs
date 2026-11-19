@@ -601,15 +601,33 @@ mod windows_processes_experimental_tests {
         ));
         std::fs::create_dir(&root).unwrap();
         let mut manager = Manager::new();
-        manager.start_windows(&root,"running","Set-Content -LiteralPath 'ready.txt' -Value ready; Start-Sleep -Seconds 30 # private-secret").unwrap();
-        let deadline = Instant::now() + Duration::from_secs(15);
-        while !root.join("ready.txt").exists() {
-            assert!(Instant::now() < deadline);
+        // The child has only SystemRoot in its environment. Use .NET instead
+        // of cmdlets that may require PowerShell module auto-loading, and an
+        // absolute path so the readiness signal does not depend on its shell location.
+        let marker = root.join("ready.txt");
+        let escaped = marker.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "$ErrorActionPreference = 'Stop'; [System.IO.File]::WriteAllText('{}', 'ready'); [System.Threading.Thread]::Sleep(60000) # private-secret",
+            escaped
+        );
+        manager.start_windows(&root, "running", &script).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !marker.exists() {
+            manager.update().unwrap();
+            let process = &manager.processes[0];
+            if process.exit.is_some() || Instant::now() >= deadline {
+                let output: Vec<u8> = process.output.lock().unwrap().iter().copied().collect();
+                panic!(
+                    "process did not signal readiness; status: {:?}; output (published after exit): {}",
+                    process.exit,
+                    String::from_utf8_lossy(&output)
+                );
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
         let snapshot = manager.snapshot().unwrap();
         assert!(!snapshot.contains("private-secret"));
-        assert!(snapshot.contains("running"));
+        assert!(snapshot.contains(r#""name":"running","state":"running""#));
         manager.stop("running").unwrap();
         assert!(manager.snapshot().unwrap().contains("exited"));
         manager.remove("running").unwrap();
