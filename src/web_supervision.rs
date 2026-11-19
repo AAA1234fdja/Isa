@@ -23,9 +23,9 @@ impl Action {
     fn requires_approval(&self, mode: Mode) -> bool {
         match mode { Mode::Always => true, Mode::Risk => !matches!(self, Self::WorkspaceInfo { .. }), Mode::Free => false }
     }
-    fn run(self, root: &std::path::Path) -> Result<Value, &'static str> {
+    fn run(self, root: &std::path::Path, profile: cli::WebExecutionProfile) -> Result<Value, &'static str> {
         match self {
-            Self::Shell { command } => cli::web_run_command(root, &command).map_err(|_| "Command could not be run; its outcome may be unknown."),
+            Self::Shell { command } => cli::web_run_command(root, &command, profile).map_err(|_| "Command could not be run; its outcome may be unknown."),
             Self::McpStart {} | Self::McpCall { .. } => Err("MCP actions require the session supervisor."),
             Self::WorkspaceInfo {} => {
                 let meta = std::fs::metadata(root).map_err(|_| "Workspace information is unavailable.")?;
@@ -38,8 +38,8 @@ impl Action {
 #[derive(Clone)]
 struct PoolScope { run: String, agent: String }
 struct PoolRun { chat: String, root: std::path::PathBuf, version: u64, expires: Instant, agents: HashSet<String>, starts: u8, calls: u8, busy: bool }
-struct Pending { pool: Option<PoolScope>, chat: String, action: Action, root: std::path::PathBuf, version: u64, expires: Instant, requires_approval: bool, server: Option<Vec<String>> }
-struct McpSession { pool_run: Option<String>, chat: String, root: std::path::PathBuf, version: u64, expires: Instant, server: Vec<String>, client: cli::WebMcpSession }
+struct Pending { profile: cli::WebExecutionProfile, pool: Option<PoolScope>, chat: String, action: Action, root: std::path::PathBuf, version: u64, expires: Instant, requires_approval: bool, server: Option<Vec<String>> }
+struct McpSession { profile: cli::WebExecutionProfile, pool_run: Option<String>, chat: String, root: std::path::PathBuf, version: u64, expires: Instant, server: Vec<String>, client: cli::WebMcpSession }
 #[derive(Default)]
 struct State { policies: HashMap<String, (Mode, u64)>, pending: HashMap<String, Pending>, sessions: HashMap<String, McpSession>, pool_runs: HashMap<String, PoolRun>, next_version: u64 }
 static STATE: OnceLock<Mutex<State>> = OnceLock::new();
@@ -133,6 +133,7 @@ fn consume(s: &mut State, chat: &str, id: &str, root: &std::path::Path, approved
 pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'static str, Value) {
     if !cfg!(unix) || !authorized(request, stream) { return err("403 Forbidden", "Local execution is disabled or unauthorized."); }
     let Some(root) = root() else { return err("503 Service Unavailable", "Execution workspace is not configured."); };
+    let Ok(profile)=cli::WebExecutionProfile::configured() else { return err("503 Service Unavailable", "Invalid or unsupported execution profile; local actions are disabled."); };
     if request.body.len() > 8192 { return err("400 Bad Request", "Request too large."); }
     match path {
         "/api/exec/policy" => {
@@ -144,7 +145,7 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
                 s.next_version = s.next_version.saturating_add(1); let version = s.next_version;
                 s.policies.insert(body.chat.clone(), (body.mode,version)); s.pending.retain(|_, p| p.chat != body.chat); s.sessions.retain(|_, v| v.chat != body.chat); s.pool_runs.retain(|_, r| r.chat != body.chat);
             }
-            ("200 OK", json!({"mode":body_mode(body.mode),"workspace":root.display().to_string()}))
+            ("200 OK", json!({"mode":body_mode(body.mode),"workspace":root.display().to_string(),"executionProfile":profile.name()}))
         }
         "/api/actions/pool/start" => {
             let Ok(body)=serde_json::from_slice::<NewPoolRun>(&request.body) else { return err("400 Bad Request", "Invalid pool run."); };
@@ -193,17 +194,17 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
                 Action::McpStart {} => { let Some(command)=mcp_command() else { return err("503 Service Unavailable", "MCP server is not configured."); }; Some(command) },
                 Action::McpCall { session, name, .. } => {
                     let Some(v)=s.sessions.get(session) else { return err("409 Conflict", "MCP session is unavailable or expired."); };
-                    if v.pool_run.as_deref()!=pool.as_ref().map(|p|p.run.as_str()) || v.chat!=chat || v.root!=root || v.version!=version || v.expires<=Instant::now() || mcp_command().as_ref()!=Some(&v.server) || v.client.tools().iter().filter(|t| t.get("name").and_then(Value::as_str)==Some(name.as_str())).count()!=1 { return err("403 Forbidden", "MCP session or tool is invalid."); }
+                    if v.profile!=profile || v.pool_run.as_deref()!=pool.as_ref().map(|p|p.run.as_str()) || v.chat!=chat || v.root!=root || v.version!=version || v.expires<=Instant::now() || mcp_command().as_ref()!=Some(&v.server) || v.client.tools().iter().filter(|t| t.get("name").and_then(Value::as_str)==Some(name.as_str())).count()!=1 { return err("403 Forbidden", "MCP session or tool is invalid."); }
                     Some(v.server.clone())
                 }, _=>None,
             };
             let requires_approval = action.requires_approval(mode);
-            let mut response = json!({"id":id,"workspace":root.display().to_string(),"mode":body_mode(mode),"requiresApproval":requires_approval,"expiresInSeconds":120});
+            let mut response = json!({"id":id,"workspace":root.display().to_string(),"mode":body_mode(mode),"requiresApproval":requires_approval,"expiresInSeconds":120,"executionProfile":profile.name()});
             if legacy { if let Action::Shell { command } = &action { response["command"] = json!(command); } }
             else { response["action"] = json!(&action); }
             if let Some(command)=&server { response["serverCommand"]=json!(command); }
             if let Some(scope)=&pool { response["poolRun"]=json!(scope.run); response["agent"]=json!(scope.agent); }
-            s.pending.insert(id, Pending { pool, chat, action, root:root.clone(),version,expires:Instant::now()+Duration::from_secs(120),requires_approval,server });
+            s.pending.insert(id, Pending { profile, pool, chat, action, root:root.clone(),version,expires:Instant::now()+Duration::from_secs(120),requires_approval,server });
             ("200 OK", response)
         }
         "/api/exec/cancel" | "/api/actions/cancel" => {
@@ -230,6 +231,7 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
                     Err((status, message)) => return err(status, message),
                 }
             };
+            if pending.profile!=profile { return err("403 Forbidden", "Execution profile changed; action was consumed."); }
             if RUNNING.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| (n < 2).then_some(n+1)).is_err() { return err("503 Service Unavailable", "Execution capacity reached; action was consumed."); }
             struct Guard; impl Drop for Guard { fn drop(&mut self) { RUNNING.fetch_sub(1, Ordering::SeqCst); } } let _guard=Guard;
             let _pool_guard=if let Some(scope)=&pending.pool {
@@ -244,24 +246,24 @@ pub fn handle(path: &str, request: &http::Request, stream: &TcpStream) -> (&'sta
                     let Some(server)=pending.server else { return err("403 Forbidden", "MCP server configuration missing."); };
                     if mcp_command().as_ref()!=Some(&server) { return err("403 Forbidden", "MCP server configuration changed."); }
                     { let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); }; s.sessions.retain(|_,v|v.expires>Instant::now()); if s.sessions.len()>=4 { return err("503 Service Unavailable", "MCP session limit reached."); } }
-                    let client=match cli::WebMcpSession::start(&root,&server) { Ok(client)=>client, Err(_)=>return err("500 Internal Server Error", "MCP start or discovery failed; server actions may have occurred.") };
+                    let client=match cli::WebMcpSession::start(&root,&server,profile) { Ok(client)=>client, Err(_)=>return err("500 Internal Server Error", "MCP start or discovery failed; server actions may have occurred.") };
                     let Ok(session)=random_id() else { return err("503 Service Unavailable", "Secure random source unavailable; server actions may have occurred."); };
                     let tools=client.tools().to_vec();
                     let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable; server actions may have occurred."); };
-                    if pending.pool.as_ref().is_some_and(|p| !s.pool_runs.contains_key(&p.run)) || s.policies.get(&body.chat).map(|v|v.1)!=Some(pending.version) || mcp_command().as_ref()!=Some(&server) || self::root()!=Some(root.clone()) { return err("403 Forbidden", "Policy or configuration changed; server actions may have occurred."); }
+                    if cli::WebExecutionProfile::configured()!=Ok(profile) || pending.pool.as_ref().is_some_and(|p| !s.pool_runs.contains_key(&p.run)) || s.policies.get(&body.chat).map(|v|v.1)!=Some(pending.version) || mcp_command().as_ref()!=Some(&server) || self::root()!=Some(root.clone()) { return err("403 Forbidden", "Policy or configuration changed; server actions may have occurred."); }
                     s.sessions.retain(|_,v|v.expires>Instant::now()); if s.sessions.len()>=4 { return err("503 Service Unavailable", "MCP session limit reached; server actions may have occurred."); }
-                    s.sessions.insert(session.clone(),McpSession { pool_run:pending.pool.as_ref().map(|p|p.run.clone()), chat:body.chat,root,version:pending.version,expires:Instant::now()+Duration::from_secs(300),server,client });
+                    s.sessions.insert(session.clone(),McpSession { profile, pool_run:pending.pool.as_ref().map(|p|p.run.clone()), chat:body.chat,root,version:pending.version,expires:Instant::now()+Duration::from_secs(300),server,client });
                     ("200 OK",json!({"result":{"session":session,"tools":tools,"expiresInSeconds":300}}))
                 }
                 Action::McpCall { session,name,arguments } => {
                     let mut session = {
                         let Ok(mut s)=state().lock() else { return err("503 Service Unavailable", "Supervisor unavailable."); };
                         let Some(v)=s.sessions.remove(&session) else { return err("409 Conflict", "MCP session unavailable or already used."); };
-                        if v.pool_run.as_deref()!=pending.pool.as_ref().map(|p|p.run.as_str()) || v.chat!=body.chat || v.root!=root || v.version!=pending.version || s.policies.get(&body.chat).map(|v|v.1)!=Some(v.version) || v.expires<=Instant::now() || pending.server.as_ref()!=Some(&v.server) || mcp_command().as_ref()!=Some(&v.server) { return err("403 Forbidden", "MCP session expired or policy changed."); } v
+                        if v.profile!=profile || v.pool_run.as_deref()!=pending.pool.as_ref().map(|p|p.run.as_str()) || v.chat!=body.chat || v.root!=root || v.version!=pending.version || s.policies.get(&body.chat).map(|v|v.1)!=Some(v.version) || v.expires<=Instant::now() || pending.server.as_ref()!=Some(&v.server) || mcp_command().as_ref()!=Some(&v.server) { return err("403 Forbidden", "MCP session expired or policy changed."); } v
                     };
                     match session.client.call(&name,arguments) { Ok(result)=>("200 OK",json!({"result":result})), Err(_)=>err("500 Internal Server Error", "MCP call failed; its outcome may be unknown. Do not blindly retry.") }
                 }
-                action => match action.run(&root) { Ok(result) => ("200 OK", json!({"result":result})), Err(message) => err("500 Internal Server Error", message) },
+                action => match action.run(&root,profile) { Ok(result) => ("200 OK", json!({"result":result})), Err(message) => err("500 Internal Server Error", message) },
             }
         }
         _ => err("404 Not Found", "Not found.")
@@ -273,7 +275,7 @@ fn body_mode(mode: Mode) -> &'static str { match mode { Mode::Always => "always"
 mod tests {
     use super::*;
     fn pending(expires: Instant) -> Pending {
-        Pending { pool:None, chat:"a".into(), action:Action::WorkspaceInfo {}, root:"/workspace".into(), version:7, expires, requires_approval:true, server:None }
+        Pending { profile:cli::WebExecutionProfile::Host, pool:None, chat:"a".into(), action:Action::WorkspaceInfo {}, root:"/workspace".into(), version:7, expires, requires_approval:true, server:None }
     }
     #[test]
     fn expired_and_changed_actions_are_consumed_without_running() {

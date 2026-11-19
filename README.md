@@ -366,6 +366,39 @@ In `replace`, `apply-edit` and `propose-edit`, ISA prints this advisory before
 requesting final approval; detected errors do not automatically apply or block a
 change. The user remains responsible for the decision and for running tests.
 
+### Optional Linux resource profile
+
+For web-launched Bash commands and MCP servers, Linux users can opt into a
+restricted **resource profile** before starting ISA:
+
+```sh
+export ISA_WEB_EXEC_PROFILE=limited
+```
+
+The default profile is `host`. An unknown profile or `limited` on an unsupported
+platform disables local actions rather than falling back. The selected profile
+is shown in the action review and bound to pending approvals and MCP sessions.
+This does not alter the separately approved CLI commands or MCP sessions.
+
+The limited profile starts web child processes with a minimal environment
+(`PATH=/usr/bin:/bin`, `LANG=C.UTF-8`) and applies Linux per-process hard and
+soft limits before execution: no core dumps, 30 seconds of CPU time, 4 billion
+bytes of virtual address space, 32 MiB per file, and 128 open file descriptors.
+Existing stricter inherited limits are not raised. If the OS rejects a limit,
+process startup fails; ISA does not retry without the limits. These settings may
+prevent software or MCP servers that depend on a custom environment, larger
+address space, or extra file descriptors from working.
+
+**This is not a sandbox.** The child still has the server user's filesystem,
+network, and operating-system permissions, can access sensitive files and may
+start descendants. Limits apply per process, not as a total process-tree,
+network, disk-space or memory budget; they do not prevent all denial of service
+or data exfiltration. Privileged processes may be able to change limits. The
+minimal environment does not protect against hostile processes running as the
+same user. Existing wall-time, output, concurrency and best-effort process-group
+cleanup remain separate and do not guarantee stopping descendants or undoing
+side effects. Use a separate OS-level isolation boundary for untrusted code.
+
 ### Manual MCP tools in web chat
 
 Unix local sessions can use **MCP tools** in an existing chat after configuring

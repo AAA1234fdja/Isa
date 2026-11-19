@@ -9,6 +9,7 @@ mod semantic;
 mod edit;
 mod feedback;
 mod mcp;
+mod web_limits;
 mod registry;
 mod repository;
 mod processes;
@@ -488,8 +489,8 @@ pub fn web_agent_loop(root: &std::path::Path, model: &str, entries: &[(String, S
     Ok((outcome.answer, outcome.steps))
 }
 
-pub fn web_run_command(root: &std::path::Path, command: &str) -> Result<serde_json::Value> {
-    feedback::web_command(root, command)
+pub(crate) fn web_run_command(root: &std::path::Path, command: &str, profile: WebExecutionProfile) -> Result<serde_json::Value> {
+    feedback::web_command(root, command, profile)
 }
 
 // The browser server passes only validated conversation roles to this entry point.
@@ -553,3 +554,5 @@ mod web_changes_tests {
 }
 
 pub(crate) use mcp::WebMcpSession;
+
+pub(crate) use web_limits::Profile as WebExecutionProfile;

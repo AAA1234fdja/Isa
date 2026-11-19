@@ -12,14 +12,16 @@ const TOKEN: &str = "test-only-local-capability-0123456789";
 struct Server { child: Child, address: String, root: PathBuf }
 impl Server {
     fn start(enabled: bool) -> Self { Self::configured(enabled,false) }
-    fn configured(enabled: bool, mcp: bool) -> Self {
+    fn configured(enabled: bool, mcp: bool) -> Self { Self::profile(enabled,mcp,None) }
+    fn profile(enabled: bool, mcp: bool, profile: Option<&str>) -> Self {
         let _guard=START_LOCK.lock().unwrap();
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let root=std::env::temp_dir().join(format!("isa-supervision-{}-{}",std::process::id(), NEXT.fetch_add(1,std::sync::atomic::Ordering::Relaxed))); fs::create_dir_all(&root).unwrap();
         let socket=TcpListener::bind("127.0.0.1:0").unwrap(); let address=socket.local_addr().unwrap().to_string(); drop(socket);
         let mut command=Command::new(env!("CARGO_BIN_EXE_isa")); command.current_dir(&root).env("ISA_ADDRESS",&address).env_remove("ISA_WEB_EXEC_TOKEN").env_remove("ISA_WEB_EXEC_WORKSPACE").stdout(Stdio::null()).stderr(Stdio::null());
         if enabled { command.env("ISA_WEB_EXEC_TOKEN",TOKEN).env("ISA_WEB_EXEC_WORKSPACE",&root); }
-        command.env_remove("ISA_WEB_MCP_COMMAND");
+        command.env_remove("ISA_WEB_MCP_COMMAND").env_remove("ISA_WEB_EXEC_PROFILE").env("ISA_TEST_SECRET","should-not-inherit");
+        if let Some(profile)=profile { command.env("ISA_WEB_EXEC_PROFILE",profile); }
         if mcp { let fixture=PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/mcp-server.cjs"); let marker=root.join("marker"); command.env("ISA_WEB_MCP_COMMAND",json!(["node",fixture.to_string_lossy(),"valid",marker.to_string_lossy()]).to_string()); }
         let child=command.spawn().unwrap(); let mut server=Self { child,address,root };
         for _ in 0..200 { if server.child.try_wait().unwrap().is_some() { panic!("server exited"); } if TcpStream::connect(&server.address).is_ok() { return server; } std::thread::sleep(Duration::from_millis(25)); } panic!("server failed to start");
@@ -128,4 +130,24 @@ fn pool_action_budgets_are_shared_and_bound_to_agents_sessions_and_chat() {
     let (_,pending)=p("agent-b",json!({"type":"mcp_start"}));assert_eq!(s.req("/api/actions/run",json!({"chat":"pool-chat","id":pending["id"],"approved":true})).0,429);
     assert_eq!(s.req("/api/actions/pool/close",json!({"chat":"pool-chat","run":run})).0,200);
     assert_eq!(p("agent-a",json!({"type":"mcp_start"})).0,409);
+}
+
+#[cfg(target_os="linux")]
+#[test]
+fn limited_profile_is_opt_in_and_bounds_web_process_resources() {
+    let s=Server::profile(true,false,Some("limited"));
+    let (code,policy)=s.req("/api/exec/policy",json!({"chat":"a","mode":"free"}));assert_eq!(code,200);assert_eq!(policy["executionProfile"],"limited");
+    let (_,p)=s.req("/api/actions/prepare",json!({"chat":"a","action":{"type":"shell","command":"printf '%s\\n' \"${ISA_TEST_SECRET-unset}\" \"${ISA_WEB_EXEC_TOKEN-unset}\" \"$(ulimit -c)\" \"$(ulimit -n)\" \"$(ulimit -v)\""}}));
+    assert_eq!(p["executionProfile"],"limited");
+    let (code,r)=s.req("/api/actions/run",json!({"chat":"a","id":p["id"],"approved":false}));assert_eq!(code,200);assert_eq!(r["result"]["exitCode"],0);
+    let lines:Vec<_>=r["result"]["stdout"].as_str().unwrap().lines().collect();assert_eq!(lines[0],"unset");assert_eq!(lines[1],"unset");assert_eq!(lines[2],"0");assert!(lines[3].parse::<u64>().unwrap()<=128);assert!(lines[4].parse::<u64>().unwrap()<=3_906_250);
+}
+#[cfg(target_os="linux")]
+#[test]
+fn limited_profile_applies_to_mcp_and_invalid_profile_fails_closed() {
+    let s=Server::profile(true,true,Some("limited"));s.req("/api/exec/policy",json!({"chat":"a","mode":"free"}));
+    let (code,p)=s.req("/api/actions/prepare",json!({"chat":"a","action":{"type":"mcp_start"}}));assert_eq!(code,200);assert_eq!(p["executionProfile"],"limited");
+    let (code,r)=s.req("/api/actions/run",json!({"chat":"a","id":p["id"],"approved":false}));assert_eq!(code,200);assert!(r["result"]["tools"].is_array());
+    s.req("/api/actions/mcp/close",json!({"chat":"a","session":r["result"]["session"]}));
+    let disabled=Server::profile(true,false,Some("unknown"));assert_eq!(disabled.req("/api/exec/policy",json!({"chat":"a","mode":"free"})).0,503);
 }

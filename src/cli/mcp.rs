@@ -211,9 +211,9 @@ where C: FnMut(&str) -> Result<bool>, M: FnMut(&str) -> Result<String>, T: FnMut
 /// calling must be authorized by the caller before invoking these methods.
 pub(crate) struct WebMcpSession { client: Client, tools: Vec<Value> }
 impl WebMcpSession {
-    pub(crate) fn start(root: &Path, command: &[String]) -> Result<Self> {
+    pub(crate) fn start(root: &Path, command: &[String], profile: super::web_limits::Profile) -> Result<Self> {
         validate_args(command)?;
-        let mut client=Client::start(root,command)?; client.initialize()?;
+        let mut client=Client::start_profile(root,command,profile)?; client.initialize()?;
         let (tools,truncated)=client.tools()?;
         if truncated { return Err("MCP discovery incomplete".into()); }
         let mut seen=HashSet::new();
@@ -237,6 +237,7 @@ struct Client;
 #[cfg(not(unix))]
 impl Client {
     fn start(_: &Path, _: &[String]) -> Result<Self> { Err("MCP stdio is supported on Unix only".into()) }
+    fn start_profile(_: &Path, _: &[String], _: super::web_limits::Profile) -> Result<Self> { Err("MCP stdio is supported on Unix only".into()) }
     fn initialize(&mut self) -> Result<()> { Err("MCP stdio is supported on Unix only".into()) }
     fn tools(&mut self) -> Result<(Vec<Value>, bool)> { Err("MCP stdio is supported on Unix only".into()) }
     fn request(&mut self, _: &str, _: Value) -> Result<Value> { Err("MCP stdio is supported on Unix only".into()) }
@@ -247,9 +248,15 @@ struct Client { child: std::process::Child, input: std::process::ChildStdin, out
 #[cfg(unix)]
 impl Client {
     fn start(root: &Path, command: &[String]) -> Result<Self> {
+        Self::start_profile(root,command,super::web_limits::Profile::Host)
+    }
+    fn start_profile(root: &Path, command: &[String], profile: super::web_limits::Profile) -> Result<Self> {
         use std::os::{fd::AsRawFd, unix::process::CommandExt};
         use std::process::{Command, Stdio};
-        let mut child = Command::new(&command[0]).args(&command[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").env_remove("ISA_WEB_MCP_COMMAND").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0).spawn()?;
+        let mut process=Command::new(&command[0]);
+        process.args(&command[1..]).current_dir(root).env_remove("BASH_ENV").env_remove("ENV").env_remove("ISA_WEB_EXEC_TOKEN").env_remove("ISA_WEB_MCP_COMMAND").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).process_group(0);
+        super::web_limits::configure(&mut process,profile)?;
+        let mut child=process.spawn()?;
         let input = child.stdin.take().expect("piped stdin");
         let output = child.stdout.take().expect("piped stdout");
         let client = Self { child, input, output, buffer: Vec::new(), received: 0, next_id: 1 };
