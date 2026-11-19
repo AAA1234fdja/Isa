@@ -19,72 +19,108 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.92.0
       # Compilation alone does not establish runtime or security support.
       - name: Check all targets
+        id: windows_check
         run: cargo check --locked --all-targets
+      # These suites are independent. Keep running after a test failure so
+      # one failing suite does not hide failures in the remaining suites.
       - name: Test Windows credential-store key recovery
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_audit_credential_store
       - name: Test staged Windows encrypted audit storage
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_audit_store
       - name: Test OS random source and audit encryption primitive
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa web_audit_crypto::tests::os_random_nonce_encrypts_and_decrypts
       - name: Test unsupported Windows components fail closed
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_fail_closed
       - name: Test bounded command control
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa command_control
       - name: Test experimental Windows Job Object primitive
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_job
       - name: Test experimental Windows suspended process primitive
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_suspended_process
       - name: Test Windows command-line quoting
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_command_line
       - name: Test PowerShell argument encoding
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa powershell_command
       - name: Test MCP stdio framing and partial-write bookkeeping
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa mcp_stdio_
       - name: Test experimental Windows process supervisor
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_processes_experimental
       - name: Test experimental Windows feedback execution
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_feedback_experimental
       - name: Test experimental Windows PowerShell execution
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_powershell
       - name: Test experimental Windows pipe polling
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_pipe
       - name: Test staged Windows MCP stdin pipe
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_mcp_pipe
       - name: Test staged Windows cancellable MCP writes
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_mcp_write
       - name: Test experimental Windows handle-list attributes
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_process_attributes
       - name: Test experimental Windows file identity checks
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_file_identity
       - name: Test Windows transaction identity and in-memory undo
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_transaction_identity
       - name: Test same-content replacement after edit approval
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa web_edit_approval_rejects_same_content_replacement
       - name: Test replacement after transaction undo review
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa web_transaction_undo_rejects_same_content_replacement_after_review
       - name: Test single-edit replacement during undo persistence
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa web_edit_rejects_same_content_replacement_during_undo_persistence
       - name: Test transaction replacement during undo persistence
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa web_transaction_rejects_same_content_replacement_during_undo_persistence
       - name: Test Windows private ACL policy
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_acl_policy
       - name: Test experimental Windows private ACL creation
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_private_acl
       - name: Test staged sandbox planning (no guest execution)
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_sandbox_
       - name: Test Windows undo record framing
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_undo_frame
       - name: Test staged Windows undo storage
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_undo_store
       - name: Test Windows read-only endpoint allowlist
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_read_only_gate
       - name: Test Windows supervisor and read-only mode
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --test windows_supervision
       - name: Test file replacement on Windows
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_file_replacement
       - name: Test Windows edit path guards
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_path_guard
       - name: Test Windows repository filtering
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_repository_filter
   format:
     name: Rust formatting (advisory baseline)

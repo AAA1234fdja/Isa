@@ -117,22 +117,54 @@ mod tests {
         fs::create_dir(&root).unwrap();
         let child_started = root.join("child-started.txt");
         let escaped = root.join("escaped.txt");
+        let control_started = root.join("control-started.txt");
+        let control_finished = root.join("control-finished.txt");
         let quoted = |path: &Path| path.to_string_lossy().replace('\'', "''");
-        let child_script = format!(
-            "Start-Sleep -Seconds 5; Set-Content -LiteralPath '{}' -Value escaped",
-            quoted(&escaped)
-        );
-        let encoded = powershell_command::arguments(&child_script)
-            .unwrap()
-            .pop()
-            .unwrap();
         let executable = powershell_path().unwrap();
-        let parent_script=format!("$p = Start-Process -FilePath '{}' -ArgumentList '-NoProfile','-NonInteractive','-EncodedCommand','{}' -PassThru; Set-Content -LiteralPath '{}' -Value $p.Id; Start-Sleep -Seconds 30",quoted(&executable),encoded,quoted(&child_started));
+        let parent_script = |started: &Path, finished: &Path, delay_ms: u32| {
+            // The marker is written by the descendant, not by its parent:
+            // observing it proves that the child actually began executing.
+            let child_script = format!(
+                "try {{ [System.IO.File]::WriteAllText('{}', 'started'); [System.Threading.Thread]::Sleep({}); [System.IO.File]::WriteAllText('{}', 'finished') }} catch {{ [Console]::Error.WriteLine($_.ToString()); exit 1 }}",
+                quoted(started), delay_ms, quoted(finished)
+            );
+            let encoded = powershell_command::arguments(&child_script)
+                .unwrap()
+                .pop()
+                .unwrap();
+            // Use .NET rather than cmdlets that depend on module auto-loading;
+            // the supervised process deliberately receives only SystemRoot.
+            format!(
+                "try {{ $info = [System.Diagnostics.ProcessStartInfo]::new(); $info.FileName = '{}'; $info.Arguments = '-NoProfile -NonInteractive -EncodedCommand {}'; $info.UseShellExecute = $false; $p = [System.Diagnostics.Process]::Start($info); $p.WaitForExit(); exit $p.ExitCode }} catch {{ [Console]::Error.WriteLine($_.ToString()); exit 1 }}",
+                quoted(&executable), encoded
+            )
+        };
+        // Positive control: without cancellation the same child fixture must
+        // create both markers, so a broken fixture cannot make the test pass.
+        let control = run(
+            &root,
+            &parent_script(&control_started, &control_finished, 300),
+            Duration::from_secs(20),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(
+            control.exit_code,
+            0,
+            "control failed: {}",
+            String::from_utf8_lossy(&control.stderr)
+        );
+        assert!(!control.timed_out && !control.cancelled);
+        assert!(
+            control_started.exists() && control_finished.exists(),
+            "control descendant did not write both markers"
+        );
+
         let cancel = Arc::new(AtomicBool::new(false));
         let signal = cancel.clone();
         let ready = child_started.clone();
         let watcher = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(20);
             while !ready.exists() && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -140,13 +172,25 @@ mod tests {
             signal.store(true, Ordering::SeqCst);
             observed
         });
-        let result = run(&root, &parent_script, Duration::from_secs(15), &cancel);
+        let result = run(
+            &root,
+            &parent_script(&child_started, &escaped, 10000),
+            Duration::from_secs(30),
+            &cancel,
+        );
         let observed = watcher.join().unwrap();
-        assert!(observed, "fixture did not start a child");
-        let result = result.unwrap();
-        assert!(result.cancelled);
+        let result = result.expect("fixture execution failed");
+        assert!(
+            observed,
+            "fixture descendant did not signal readiness; exit: {}, stdout: {}, stderr: {}",
+            result.exit_code,
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.cancelled, "cancellation was not reported");
         assert!(!result.timed_out);
-        std::thread::sleep(Duration::from_secs(6));
+        // Wait past the child's full delay, not just past the parent's exit.
+        std::thread::sleep(Duration::from_secs(11));
         assert!(
             !escaped.exists(),
             "fixture descendant continued after cancellation"
