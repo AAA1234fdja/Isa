@@ -4,3 +4,11 @@
 
 # npm dependencies are installed locally from lockfiles.
 node_modules/
+
+# Local Windows desktop builds.
+/desktop/windows/bin/
+/desktop/windows/obj/
+/desktop/tests/bin/
+/desktop/tests/obj/
+/desktop-prototype/
+/desktop-installer/

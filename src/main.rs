@@ -3,6 +3,7 @@ use std::env;
 mod cli;
 mod http;
 mod plugins;
+mod ui_assets;
 #[allow(dead_code)]
 mod web_audit_crypto;
 mod web_audit_store;
@@ -12,7 +13,8 @@ mod windows_supervision_gate;
 use std::io;
 use std::net::{TcpListener, TcpStream};
 
-// Embedded assets are a fallback when running outside the project directory.
+// Embedded assets are the fallback for live development and the sole source
+// in embedded mode; this setting does not protect the server from requests.
 const INTERFACE: &str = include_str!("../index.html");
 const INTERFACE_CSS: &[u8] = include_bytes!("../assets/interface.css");
 const INTERFACE_JS: &[u8] = include_bytes!("../assets/interface.js");
@@ -375,7 +377,7 @@ fn web_chat(body: &[u8], model: &str) -> Result<Vec<u8>, &'static str> {
     serde_json::to_vec(&serde_json::json!({"provider":"ollama","role":"assistant","content":reply,"usageCalls":usage})).map_err(|_| "Could not encode response")
 }
 
-fn handle_request(mut stream: TcpStream) -> io::Result<()> {
+fn handle_request(mut stream: TcpStream, assets: ui_assets::AssetMode) -> io::Result<()> {
     let request = match http::read_request(&mut stream) {
         Ok(request) => request,
         Err(_) => {
@@ -662,112 +664,134 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("GET" | "HEAD", "/" | "/index.html") => (
             "200 OK",
             "text/html; charset=utf-8",
-            std::fs::read("index.html").unwrap_or_else(|_| INTERFACE.as_bytes().to_vec()),
+            assets.read(std::path::Path::new("index.html"), INTERFACE.as_bytes()),
         ),
         ("GET" | "HEAD", "/assets/interface.css") => (
             "200 OK",
             "text/css; charset=utf-8",
-            std::fs::read("assets/interface.css").unwrap_or_else(|_| INTERFACE_CSS.to_vec()),
+            assets.read(std::path::Path::new("assets/interface.css"), INTERFACE_CSS),
         ),
         ("GET" | "HEAD", "/assets/interface.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/interface.js").unwrap_or_else(|_| INTERFACE_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/interface.js"), INTERFACE_JS),
         ),
         ("GET" | "HEAD", "/assets/preview.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/preview.js").unwrap_or_else(|_| PREVIEW_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/preview.js"), PREVIEW_JS),
         ),
         ("GET" | "HEAD", "/assets/layout.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/layout.js").unwrap_or_else(|_| LAYOUT_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/layout.js"), LAYOUT_JS),
         ),
         ("GET" | "HEAD", "/assets/appearance.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/appearance.js").unwrap_or_else(|_| APPEARANCE_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/appearance.js"), APPEARANCE_JS),
         ),
         ("GET" | "HEAD", "/assets/supervised-actions.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/supervised-actions.js")
-                .unwrap_or_else(|_| SUPERVISED_ACTIONS_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/supervised-actions.js"),
+                SUPERVISED_ACTIONS_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/attachments.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/attachments.js").unwrap_or_else(|_| ATTACHMENTS_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/attachments.js"),
+                ATTACHMENTS_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/projects.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/projects.js").unwrap_or_else(|_| PROJECTS_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/projects.js"), PROJECTS_JS),
         ),
         ("GET" | "HEAD", "/assets/settings.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/settings.js").unwrap_or_else(|_| SETTINGS_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/settings.js"), SETTINGS_JS),
         ),
         ("GET" | "HEAD", "/assets/agents.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/agents.js").unwrap_or_else(|_| AGENTS_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/agents.js"), AGENTS_JS),
         ),
         ("GET" | "HEAD", "/assets/routing.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/routing.js").unwrap_or_else(|_| ROUTING_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/routing.js"), ROUTING_JS),
         ),
         ("GET" | "HEAD", "/assets/chat.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/chat.js").unwrap_or_else(|_| CHAT_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/chat.js"), CHAT_JS),
         ),
         ("GET" | "HEAD", "/assets/sidebar.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/sidebar.js").unwrap_or_else(|_| SIDEBAR_JS.to_vec()),
+            assets.read(std::path::Path::new("assets/sidebar.js"), SIDEBAR_JS),
         ),
         ("GET" | "HEAD", "/assets/notifications.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/notifications.js").unwrap_or_else(|_| NOTIFICATIONS_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/notifications.js"),
+                NOTIFICATIONS_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/provider-utils.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/provider-utils.js")
-                .unwrap_or_else(|_| PROVIDER_UTILS_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/provider-utils.js"),
+                PROVIDER_UTILS_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/conversation-utils.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/conversation-utils.js")
-                .unwrap_or_else(|_| CONVERSATION_UTILS_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/conversation-utils.js"),
+                CONVERSATION_UTILS_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/provider-client.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/provider-client.js")
-                .unwrap_or_else(|_| PROVIDER_CLIENT_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/provider-client.js"),
+                PROVIDER_CLIENT_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/pool-runner.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/pool-runner.js").unwrap_or_else(|_| POOL_RUNNER_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/pool-runner.js"),
+                POOL_RUNNER_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/project-store.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/project-store.js").unwrap_or_else(|_| PROJECT_STORE_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/project-store.js"),
+                PROJECT_STORE_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/project-ui-module.js") => (
             "200 OK",
             "text/javascript; charset=utf-8",
-            std::fs::read("assets/project-ui-module.js")
-                .unwrap_or_else(|_| PROJECT_UI_MODULE_JS.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/project-ui-module.js"),
+                PROJECT_UI_MODULE_JS,
+            ),
         ),
         ("GET" | "HEAD", "/assets/vendor/pdf.min.mjs") => (
             "200 OK",
@@ -847,13 +871,15 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
         ("GET" | "HEAD", "/assets/isa-logo-transparent.png") => (
             "200 OK",
             "image/png",
-            std::fs::read("assets/isa-logo-transparent.png")
-                .unwrap_or_else(|_| TRANSPARENT_LOGO.to_vec()),
+            assets.read(
+                std::path::Path::new("assets/isa-logo-transparent.png"),
+                TRANSPARENT_LOGO,
+            ),
         ),
         ("GET" | "HEAD", "/assets/isa-logo.png") => (
             "200 OK",
             "image/png",
-            std::fs::read("assets/isa-logo.png").unwrap_or_else(|_| LOGO.to_vec()),
+            assets.read(std::path::Path::new("assets/isa-logo.png"), LOGO),
         ),
         ("GET" | "HEAD", _) => (
             "404 Not Found",
@@ -871,13 +897,14 @@ fn handle_request(mut stream: TcpStream) -> io::Result<()> {
 
 fn main() -> io::Result<()> {
     let address = env::var("ISA_ADDRESS").unwrap_or_else(|_| "127.0.0.1:4174".to_owned());
+    let assets = ui_assets::AssetMode::parse(env::var_os("ISA_ASSET_MODE").as_deref())?;
     let listener = TcpListener::bind(&address)?;
-    println!("ISA preview listening on http://{address}");
+    println!("ISA preview listening on http://{}", listener.local_addr()?);
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
                 std::thread::spawn(move || {
-                    if let Err(error) = handle_request(stream) {
+                    if let Err(error) = handle_request(stream, assets) {
                         eprintln!("Request failed: {error}");
                     }
                 });

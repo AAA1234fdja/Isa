@@ -11,6 +11,51 @@ permissions:
   contents: read
 
 jobs:
+  windows-desktop-prototype:
+    name: Windows desktop prototype build (experimental)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Test desktop navigation and backend configuration
+        run: dotnet run --project desktop/tests/DesktopPolicy.Tests.csproj --configuration Release
+      - name: Build desktop backend
+        run: cargo build --locked --release --bin isa
+      - name: Publish desktop prototype
+        shell: pwsh
+        run: |
+          dotnet publish desktop/windows/Isa.Desktop.csproj -c Release -r win-x64 --self-contained true -o desktop-prototype
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target/release/isa.exe desktop-prototype/isa.exe
+          Copy-Item LICENSE desktop-prototype/LICENSE
+          Copy-Item desktop/windows/README.md desktop-prototype/README.md
+      - name: Build unsigned prototype installer
+        shell: pwsh
+        run: |
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler)) { throw 'Inno Setup 6 compiler is not installed on the runner' }
+          & $compiler desktop/windows/installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Smoke test installed desktop and uninstaller
+        shell: pwsh
+        run: ./desktop/windows/test-installer.ps1
+      - name: Upload unsigned prototype installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: isa-windows-desktop-installer-prototype
+          path: desktop-installer/ISA-Desktop-Prototype-Setup.exe
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload unsigned portable prototype
+        uses: actions/upload-artifact@v4
+        with:
+          name: isa-windows-desktop-prototype
+          path: desktop-prototype/
+          if-no-files-found: error
+          retention-days: 7
   windows-compile:
     name: Windows compile check (experimental)
     runs-on: windows-latest
@@ -113,6 +158,9 @@ jobs:
       - name: Test Windows supervisor and read-only mode
         if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --test windows_supervision
+      - name: Test live and embedded UI asset modes
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --test ui_asset_modes
       - name: Test file replacement on Windows
         if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
         run: cargo test --locked --bin isa windows_file_replacement

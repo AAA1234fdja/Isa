@@ -1,10 +1,15 @@
 # ISA
 
-ISA is an early-stage application with a Rust server and a browser interface. It supports provider routing, limited agent workflows and opt-in local actions; many integrations remain experimental or incomplete. Browser project records are not connected server workspaces, and there is no desktop application.
+ISA is an early-stage application with a Rust server and a browser interface. It supports provider routing, limited agent workflows and opt-in local actions; many integrations remain experimental or incomplete. Browser project records are not connected server workspaces, and there is no finished desktop application or installer.
 
 Chat provider configuration and credential limitations are documented in [docs/providers.md](docs/providers.md). See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md) for development and vulnerability reporting.
 
 The project is licensed under [Apache License 2.0](LICENSE). Bundled third-party components may have separate licenses; see their accompanying notices.
+
+Experimental Windows desktop and installer prototypes are being developed
+separately from the live server; see [desktop/windows/README.md](desktop/windows/README.md).
+They have not yet been validated on Windows and do not change the existing
+`cargo run` workflow.
 
 ## Evaluation evidence
 
@@ -21,6 +26,18 @@ cargo run
 Open `http://127.0.0.1:4174`. Set `ISA_ADDRESS=0.0.0.0:4174` when the preview must be accessible from another host. This minimal development server is not intended for public deployment.
 
 ## Frontend development
+
+The default `ISA_ASSET_MODE=live` serves local UI files from the current
+working directory, with embedded assets as a fallback. This preserves the
+existing `cargo run` development workflow. Set `ISA_ASSET_MODE=embedded` to
+serve only the UI assets compiled into the binary, even if similarly named
+files exist in the working directory. Any other value fails at startup. The
+embedded mode is a building block for a future desktop package, **not** an
+installer, application window, authentication mechanism, or sandbox. It does
+not change workspace or provider settings. `ISA_ADDRESS=127.0.0.1:0` requests
+an available loopback port; the server prints the actual bound address. A
+changing port changes the browser origin and can make browser-local data appear
+separate. Do not expose the server to untrusted networks.
 
 `index.html` is a minimal shell. `frontend/src/layout-data.mjs` describes the initial interface as a declarative DOM tree, and `frontend/src/layout.mjs` mounts it using DOM APIs before the application scripts run. JavaScript is required to display the workspace; the HTML shell contains a no-script notice. Rebuild the layout bundle after changing either source file.
 
