@@ -55,12 +55,14 @@ internal sealed class MainWindow : Form
             core.Settings.AreHostObjectsAllowed = false;
             core.Settings.IsWebMessageEnabled = false;
             core.NavigationStarting += RestrictNavigation;
-            core.FrameNavigationStarting += RestrictNavigation;
-            core.NewWindowRequested += (_, args) => args.Handled = true;
+            core.FrameNavigationStarting += RestrictFrameNavigation;
+            core.NewWindowRequested += (_, args) =>
+            {
+                args.Handled = true;
+                if (args.IsUserInitiated) QueueExternalLink(args.Uri);
+            };
             core.PermissionRequested += (_, args) => args.State = CoreWebView2PermissionState.Deny;
-            // Downloads need an explicit, reviewed desktop design; they are
-            // disabled in this prototype, including chat export.
-            core.DownloadStarting += (_, args) => args.Cancel = true;
+            core.DownloadStarting += OnDownloadStarting;
             core.NavigationCompleted += OnNavigationCompleted;
             core.ProcessFailed += (_, args) =>
             {
@@ -159,9 +161,84 @@ internal sealed class MainWindow : Form
             throw new InvalidOperationException("The ISA backend stopped during startup.");
     }
 
-    private static void RestrictNavigation(object? sender, CoreWebView2NavigationStartingEventArgs args)
+    private void RestrictNavigation(object? sender, CoreWebView2NavigationStartingEventArgs args)
+    {
+        if (DesktopPolicy.IsAllowedNavigation(args.Uri)) return;
+        args.Cancel = true;
+        if (args.IsUserInitiated) QueueExternalLink(args.Uri);
+    }
+
+    private static void RestrictFrameNavigation(object? sender, CoreWebView2NavigationStartingEventArgs args)
     {
         if (!DesktopPolicy.IsAllowedNavigation(args.Uri)) args.Cancel = true;
+    }
+
+    private void QueueExternalLink(string? target)
+    {
+        if (smokeTest || !DesktopPolicy.TryExternalHttps(target, out var uri) || uri is null) return;
+        // A modal dialog cannot safely run inside a WebView2 event callback.
+        try
+        {
+            BeginInvoke((Action)(() =>
+            {
+                if (closing.IsCancellationRequested || IsDisposed) return;
+                string message = $"Open this external HTTPS link in your default browser?\n\nHost: {uri.IdnHost}\n\n{uri.AbsoluteUri}\n\nThe destination is not controlled by ISA.";
+                if (MessageBox.Show(this, message, "Open external link", MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+                try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
+                catch (Exception error) when (error is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                    MessageBox.Show(this, "Could not open the default browser.", "Open external link",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }));
+        }
+        catch (InvalidOperationException) { /* Window is closing; do not open the link. */ }
+    }
+
+    private void OnDownloadStarting(object? sender, CoreWebView2DownloadStartingEventArgs args)
+    {
+        // Only blobs created on the ISA origin are eligible. Every export
+        // requires an explicit file choice; other downloads fail closed.
+        if (smokeTest || !DesktopPolicy.IsLocalBlobDownload(args.DownloadOperation.Uri))
+        {
+            args.Cancel = true;
+            return;
+        }
+        args.Handled = true;
+        var deferral = args.GetDeferral();
+        try
+        {
+            BeginInvoke((Action)(() =>
+            {
+                try
+                {
+                    if (closing.IsCancellationRequested || IsDisposed) { args.Cancel = true; return; }
+                    using var dialog = new SaveFileDialog
+                    {
+                        Title = "Save ISA export",
+                        FileName = "isa-export.json",
+                        Filter = "JSON files (*.json)|*.json|All files (*.*)|*.*",
+                        AddExtension = true,
+                        OverwritePrompt = true,
+                    };
+                    if (dialog.ShowDialog(this) != DialogResult.OK) { args.Cancel = true; return; }
+                    args.ResultFilePath = dialog.FileName;
+                }
+                catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
+                {
+                    args.Cancel = true;
+                    if (!closing.IsCancellationRequested)
+                        MessageBox.Show(this, "Could not save the export.", "ISA export", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally { deferral.Complete(); }
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+            args.Cancel = true;
+            deferral.Complete();
+        }
     }
 
     private void BackendExited(object? sender, EventArgs e)

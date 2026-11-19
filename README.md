@@ -8,8 +8,8 @@ The project is licensed under [Apache License 2.0](LICENSE). Bundled third-party
 
 Experimental Windows desktop and installer prototypes are being developed
 separately from the live server; see [desktop/windows/README.md](desktop/windows/README.md).
-They have not yet been validated on Windows and do not change the existing
-`cargo run` workflow.
+A prior revision passed Windows CI smoke checks, but broader validation remains
+pending. The existing `cargo run` workflow is unchanged.
 
 ## Evaluation evidence
 

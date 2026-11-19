@@ -1,9 +1,10 @@
 # ISA Windows desktop prototype
 
 This is an **unsigned experimental desktop and installer prototype**, not a
-production release. Neither has yet been validated on Windows. It is an
-additional desktop entry point; `cargo run` from the project folder remains
-the separate live-development server.
+production release. A previous version passed Windows CI smoke checks, but
+changes after that run require their own validation. It is an additional
+desktop entry point; `cargo run` from the project folder remains the separate
+live-development server.
 
 ## Build on Windows x64
 
@@ -47,10 +48,11 @@ release.
 CI is configured to build the portable folder and installer, then smoke-test
 installation, missing-backend and occupied-port failures, WebView startup,
 frontend mounting, backend shutdown, uninstall, and profile retention. The
-smoke mode uses a temporary WebView profile and closes automatically. Its
-artifacts are short-lived and unsigned. These checks have not yet run on
-Windows for this revision and do not replace interactive use, broader
-compatibility testing, or a security review.
+smoke mode uses a temporary WebView profile and closes automatically. These
+checks passed for [commit `07d320a`](https://github.com/AAA1234fdja/Isa/actions/runs/44627988564),
+but have not yet verified subsequent changes. Artifacts are short-lived and
+unsigned. CI does not replace interactive use, broader compatibility testing,
+or a security review.
 
 ## Prototype behavior and limitations
 
@@ -61,11 +63,14 @@ compatibility testing, or a security review.
   experimental shell and local-model server configuration are therefore not
   enabled by this wrapper; a future reviewed configuration flow is required.
   Custom providers configured directly in the UI remain separate.
-- Navigation and frames are limited to that local origin, new windows and
-  downloads are blocked, and WebView permission requests are denied. Links to
-  external sites, chat export, microphone/voice input and any other functionality
-  depending on those features are consequently unavailable in this prototype.
-  No privileged native object or messaging bridge is exposed to the page.
+- The desktop window and frames remain restricted to the local origin. A
+  user-initiated HTTPS link may be opened in the default browser only after a
+  confirmation showing the destination; other external navigation is blocked.
+  Locally created blob downloads offer an explicit Save dialog, while other
+  downloads are blocked. These link and export paths are experimental and need
+  interactive Windows validation. WebView permission requests remain denied, so
+  microphone/voice input is unavailable. No privileged native object or
+  messaging bridge is exposed to the page.
 - WebView data is stored separately under `%LOCALAPPDATA%\ISA\DesktopPrototype`.
   Browser chats are not imported. The fixed origin helps retain WebView storage
   between launches but local data is not encrypted by the wrapper. A separate

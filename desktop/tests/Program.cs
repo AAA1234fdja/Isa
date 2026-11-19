@@ -27,6 +27,27 @@ foreach (string target in new[] {
 }) Check(!DesktopPolicy.IsAllowedNavigation(target), $"Expected blocked: {target}");
 Check(!DesktopPolicy.IsAllowedNavigation(null), "Null must be blocked");
 
+Check(DesktopPolicy.IsLocalBlobDownload("blob:http://127.0.0.1:4175/7ea467bf-817a-4653-97a5-76c6d542b6e1"), "Local blob should be eligible for reviewed export");
+foreach (string target in new[] {
+    "https://example.com/file.json",
+    "data:text/plain,hello",
+    "blob:https://example.com/file",
+    "blob:http://127.0.0.1:4174/file",
+    "blob:http://127.0.0.1:4175@evil.example/file",
+    "blob:file:///C:/secrets",
+    "",
+}) Check(!DesktopPolicy.IsLocalBlobDownload(target), $"Expected download blocked: {target}");
+Check(!DesktopPolicy.IsLocalBlobDownload(null), "Null download must be blocked");
+
+foreach (string target in new[] { "https://example.com/path", "https://example.com:8443/" })
+    Check(DesktopPolicy.TryExternalHttps(target, out _), $"Expected eligible HTTPS link: {target}");
+foreach (string target in new[] {
+    "http://example.com", "javascript:alert(1)", "file:///C:/secret", "https://user:password@example.com/",
+    "https://example.com/with space", "https://example.com/\u202Eevil", "", "/relative"
+}) Check(!DesktopPolicy.TryExternalHttps(target, out _), $"Expected external link blocked: {target}");
+Check(!DesktopPolicy.TryExternalHttps(null, out _), "Null external link must be blocked");
+Check(!DesktopPolicy.TryExternalHttps("https://example.com/" + new string('x', 2048), out _), "Oversized external link must be blocked");
+
 var info = new ProcessStartInfo("unused");
 info.Environment["ISA_WEB_EXEC_TOKEN"] = "test-value";
 info.Environment["ISA_WEB_WINDOWS_SHELL_EXPERIMENTAL"] = "1";
