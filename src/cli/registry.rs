@@ -16,15 +16,25 @@ pub enum Kind {
 
 impl Kind {
     fn folder(self) -> &'static str {
-        match self { Self::Contract => "contracts", Self::Goal => "goals" }
+        match self {
+            Self::Contract => "contracts",
+            Self::Goal => "goals",
+        }
     }
     fn label(self) -> &'static str {
-        match self { Self::Contract => "contract", Self::Goal => "goal" }
+        match self {
+            Self::Contract => "contract",
+            Self::Goal => "goal",
+        }
     }
 }
 
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= 80 && id.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+    !id.is_empty()
+        && id.len() <= 80
+        && id
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
 }
 
 fn timestamp() -> Result<u64> {
@@ -33,7 +43,9 @@ fn timestamp() -> Result<u64> {
 
 fn checked_text(text: &str) -> Result<&str> {
     let text = text.trim();
-    if text.is_empty() || text.len() > MAX_TEXT_BYTES { return Err("text must be nonempty and at most 16 KiB".into()); }
+    if text.is_empty() || text.len() > MAX_TEXT_BYTES {
+        return Err("text must be nonempty and at most 16 KiB".into());
+    }
     Ok(text)
 }
 
@@ -43,7 +55,9 @@ fn dir(root: &Path, kind: Kind, create: bool) -> Result<PathBuf> {
     for path in [&base, &child] {
         match fs::symlink_metadata(path) {
             Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => (),
-            Ok(_) => return Err("registry directory must be a real directory, not a symlink".into()),
+            Ok(_) => {
+                return Err("registry directory must be a real directory, not a symlink".into())
+            }
             Err(error) if error.kind() == io::ErrorKind::NotFound && create => {
                 fs::create_dir(path)?;
             }
@@ -55,7 +69,11 @@ fn dir(root: &Path, kind: Kind, create: bool) -> Result<PathBuf> {
 }
 
 fn record_path(root: &Path, kind: Kind, id: &str, create_dir: bool) -> Result<PathBuf> {
-    if !valid_id(id) { return Err("ID must contain only letters, numbers, '-' or '_' (maximum 80 characters)".into()); }
+    if !valid_id(id) {
+        return Err(
+            "ID must contain only letters, numbers, '-' or '_' (maximum 80 characters)".into(),
+        );
+    }
     Ok(dir(root, kind, create_dir)?.join(format!("{id}.json")))
 }
 
@@ -72,7 +90,9 @@ fn private_options() -> OpenOptions {
 
 fn encoded(record: &Value) -> Result<Vec<u8>> {
     let bytes = serde_json::to_vec_pretty(record)?;
-    if bytes.len() as u64 > MAX_RECORD_BYTES { return Err("record exceeds size limit".into()); }
+    if bytes.len() as u64 > MAX_RECORD_BYTES {
+        return Err("record exceeds size limit".into());
+    }
     Ok(bytes)
 }
 
@@ -90,7 +110,9 @@ fn create(root: &Path, kind: Kind, id: &str, record: &Value) -> Result<()> {
 fn update(root: &Path, kind: Kind, id: &str, record: &Value) -> Result<()> {
     let path = record_path(root, kind, id, false)?;
     let metadata = fs::symlink_metadata(&path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() { return Err("record must be a regular file".into()); }
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err("record must be a regular file".into());
+    }
     let data = encoded(record)?;
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let temp = path.with_file_name(format!(".{id}-{}-{nonce}.tmp", std::process::id()));
@@ -98,23 +120,28 @@ fn update(root: &Path, kind: Kind, id: &str, record: &Value) -> Result<()> {
         let mut file = private_options().open(&temp)?;
         file.write_all(&data)?;
         file.sync_all()?;
+        drop(file); // Close the temporary file before replacing the destination.
         fs::rename(&temp, &path)?;
         Ok(())
     })();
-    if result.is_err() { let _ = fs::remove_file(&temp); }
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
     result
 }
 
 pub fn read(root: &Path, kind: Kind, id: &str) -> Result<Value> {
     let path = record_path(root, kind, id, false)?;
     let metadata = fs::symlink_metadata(&path)?;
-    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_RECORD_BYTES {
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > MAX_RECORD_BYTES
+    {
         return Err("record must be a regular file within the size limit".into());
     }
     let record: Value = serde_json::from_slice(&fs::read(path)?)?;
     if record.get("version").and_then(Value::as_u64) != Some(1)
         || record.get("id").and_then(Value::as_str) != Some(id)
-        || record.get("kind").and_then(Value::as_str) != Some(kind.label()) {
+        || record.get("kind").and_then(Value::as_str) != Some(kind.label())
+    {
         return Err("invalid or unsupported registry record".into());
     }
     Ok(record)
@@ -130,11 +157,17 @@ pub fn list(root: &Path, kind: Kind) -> Result<Vec<String>> {
     let mut ids = Vec::new();
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_file() { continue; }
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
         let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") { continue; }
+        if path.extension().and_then(|s| s.to_str()) != Some("json") {
+            continue;
+        }
         if let Some(id) = path.file_stem().and_then(|s| s.to_str()) {
-            if valid_id(id) { ids.push(id.to_owned()); }
+            if valid_id(id) {
+                ids.push(id.to_owned());
+            }
         }
     }
     ids.sort();
@@ -144,27 +177,40 @@ pub fn list(root: &Path, kind: Kind) -> Result<Vec<String>> {
 pub fn create_contract(root: &Path, id: &str, objective: &str) -> Result<()> {
     let objective = checked_text(objective)?;
     let now = timestamp()?;
-    create(root, Kind::Contract, id, &json!({
-        "version": 1,
-        "kind": "contract",
-        "id": id,
-        "objective": objective,
-        "instructions": "",
-        "deliverables": "",
-        "allowed_tools": [],
-        "status": "draft",
-        "created_at": now,
-        "updated_at": now,
-    }))
+    create(
+        root,
+        Kind::Contract,
+        id,
+        &json!({
+            "version": 1,
+            "kind": "contract",
+            "id": id,
+            "objective": objective,
+            "instructions": "",
+            "deliverables": "",
+            "allowed_tools": [],
+            "status": "draft",
+            "created_at": now,
+            "updated_at": now,
+        }),
+    )
 }
 
 pub fn set_contract(root: &Path, id: &str, field: &str, value: &str) -> Result<()> {
     let mut record = read(root, Kind::Contract, id)?;
     match field {
-        "objective" | "instructions" | "deliverables" => { record[field] = json!(checked_text(value)?); }
-        "status" if matches!(value, "draft" | "ready" | "archived") => { record[field] = json!(value); }
+        "objective" | "instructions" | "deliverables" => {
+            record[field] = json!(checked_text(value)?);
+        }
+        "status" if matches!(value, "draft" | "ready" | "archived") => {
+            record[field] = json!(value);
+        }
         "status" => return Err("contract status must be draft, ready, or archived".into()),
-        _ => return Err("editable contract fields: objective, instructions, deliverables, status".into()),
+        _ => {
+            return Err(
+                "editable contract fields: objective, instructions, deliverables, status".into(),
+            )
+        }
     }
     record["updated_at"] = json!(timestamp()?);
     update(root, Kind::Contract, id, &record)
@@ -173,20 +219,27 @@ pub fn set_contract(root: &Path, id: &str, field: &str, value: &str) -> Result<(
 pub fn create_goal(root: &Path, id: &str, objective: &str) -> Result<()> {
     let objective = checked_text(objective)?;
     let now = timestamp()?;
-    create(root, Kind::Goal, id, &json!({
-        "version": 1,
-        "kind": "goal",
-        "id": id,
-        "objective": objective,
-        "status": "open",
-        "contract_id": null,
-        "created_at": now,
-        "updated_at": now,
-    }))
+    create(
+        root,
+        Kind::Goal,
+        id,
+        &json!({
+            "version": 1,
+            "kind": "goal",
+            "id": id,
+            "objective": objective,
+            "status": "open",
+            "contract_id": null,
+            "created_at": now,
+            "updated_at": now,
+        }),
+    )
 }
 
 pub fn set_goal_status(root: &Path, id: &str, status: &str) -> Result<()> {
-    if !matches!(status, "open" | "paused" | "completed") { return Err("goal status must be open, paused, or completed".into()); }
+    if !matches!(status, "open" | "paused" | "completed") {
+        return Err("goal status must be open, paused, or completed".into());
+    }
     let mut record = read(root, Kind::Goal, id)?;
     record["status"] = json!(status);
     record["updated_at"] = json!(timestamp()?);
@@ -195,7 +248,9 @@ pub fn set_goal_status(root: &Path, id: &str, status: &str) -> Result<()> {
 
 pub fn bind_goal(root: &Path, goal_id: &str, contract_id: &str) -> Result<()> {
     let contract = read(root, Kind::Contract, contract_id)?;
-    if contract.get("status").and_then(Value::as_str) == Some("archived") { return Err("cannot bind an archived contract".into()); }
+    if contract.get("status").and_then(Value::as_str) == Some("archived") {
+        return Err("cannot bind an archived contract".into());
+    }
     let mut goal = read(root, Kind::Goal, goal_id)?;
     goal["contract_id"] = json!(contract_id);
     goal["updated_at"] = json!(timestamp()?);
@@ -214,5 +269,28 @@ mod tests {
     #[test]
     fn goals_reject_invalid_status() {
         assert!(set_goal_status(Path::new("."), "missing", "running").is_err());
+    }
+}
+
+#[cfg(test)]
+mod windows_file_replacement_tests {
+    use super::*;
+    #[test]
+    fn windows_file_replacement_registry_updates_existing_record() {
+        let root = std::env::temp_dir().join(format!(
+            "isa-registry-replace-{}-{}-é",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir(&root).unwrap();
+        let mut record = json!({"version":1,"id":"test","kind":"goal","text":"first"});
+        create(&root, Kind::Goal, "test", &record).unwrap();
+        record["text"] = json!("second");
+        update(&root, Kind::Goal, "test", &record).unwrap();
+        assert_eq!(read(&root, Kind::Goal, "test").unwrap()["text"], "second");
+        fs::remove_dir_all(root).unwrap();
     }
 }

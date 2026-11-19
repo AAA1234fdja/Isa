@@ -3,39 +3,241 @@ name: Rust checks
 on:
   push:
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '23 5 * * 1'
 
 permissions:
   contents: read
 
 jobs:
+  windows-compile:
+    name: Windows compile check (experimental)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      # Compilation alone does not establish runtime or security support.
+      - name: Check all targets
+        id: windows_check
+        run: cargo check --locked --all-targets
+      # These suites are independent. Keep running after a test failure so
+      # one failing suite does not hide failures in the remaining suites.
+      - name: Test Windows credential-store key recovery
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_audit_credential_store
+      - name: Test staged Windows encrypted audit storage
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_audit_store
+      - name: Test OS random source and audit encryption primitive
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa web_audit_crypto::tests::os_random_nonce_encrypts_and_decrypts
+      - name: Test unsupported Windows components fail closed
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_fail_closed
+      - name: Test bounded command control
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa command_control
+      - name: Test experimental Windows Job Object primitive
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_job
+      - name: Test experimental Windows suspended process primitive
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_suspended_process
+      - name: Test Windows command-line quoting
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_command_line
+      - name: Test PowerShell argument encoding
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa powershell_command
+      - name: Test MCP stdio framing and partial-write bookkeeping
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa mcp_stdio_
+      - name: Test experimental Windows process supervisor
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_processes_experimental
+      - name: Test experimental Windows feedback execution
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_feedback_experimental
+      - name: Test experimental Windows PowerShell execution
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_powershell
+      - name: Test experimental Windows pipe polling
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_pipe
+      - name: Test staged Windows MCP stdin pipe
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_mcp_pipe
+      - name: Test staged Windows cancellable MCP writes
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_mcp_write
+      - name: Test experimental Windows handle-list attributes
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_process_attributes
+      - name: Test experimental Windows file identity checks
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_file_identity
+      - name: Test Windows transaction identity and in-memory undo
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_transaction_identity
+      - name: Test same-content replacement after edit approval
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa web_edit_approval_rejects_same_content_replacement
+      - name: Test replacement after transaction undo review
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa web_transaction_undo_rejects_same_content_replacement_after_review
+      - name: Test single-edit replacement during undo persistence
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa web_edit_rejects_same_content_replacement_during_undo_persistence
+      - name: Test transaction replacement during undo persistence
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa web_transaction_rejects_same_content_replacement_during_undo_persistence
+      - name: Test Windows private ACL policy
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_acl_policy
+      - name: Test experimental Windows private ACL creation
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_private_acl
+      - name: Test staged sandbox planning (no guest execution)
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_sandbox_
+      - name: Test Windows undo record framing
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_undo_frame
+      - name: Test staged Windows undo storage
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_undo_store
+      - name: Test Windows read-only endpoint allowlist
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_read_only_gate
+      - name: Test Windows supervisor and read-only mode
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --test windows_supervision
+      - name: Test file replacement on Windows
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_file_replacement
+      - name: Test Windows edit path guards
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_path_guard
+      - name: Test Windows repository filtering
+        if: ${{ !cancelled() && steps.windows_check.outcome == 'success' }}
+        run: cargo test --locked --bin isa windows_repository_filter
+  format:
+    name: Rust formatting (advisory baseline)
+    runs-on: ubuntu-latest
+    # The existing tree is not rustfmt-clean; keep this visible but non-gating
+    # until formatting is migrated and reviewed separately.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+  lint:
+    name: Clippy (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+        with:
+          components: clippy
+      - run: cargo clippy --locked --all-targets
+  dependency-audit:
+    name: RustSec dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      - run: cargo install cargo-audit --version 0.23.0 --locked
+      - run: cargo audit
+  macos-compile:
+    name: macOS compile check (experimental)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.92.0
+      # Compilation alone does not establish runtime or security support.
+      - run: cargo check --locked --all-targets
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.92.0
       - name: Install locked MCP interoperability test dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund --prefix tests/mcp-sdk
+      - name: Install locked browser test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix tests/ui
+      - name: Install frontend build dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix frontend
+      - name: Check generated frontend bundles
+        run: npm run check --prefix frontend
       - name: Test per-chat supervision preferences
         run: node tests/chat-supervision.cjs
         env:
-          JSDOM_PATH: ${{ github.workspace }}/tests/mcp-sdk/node_modules/jsdom
+          JSDOM_PATH: ${{ github.workspace }}/tests/ui/node_modules/jsdom
       - name: Test browser pool resilience
         env:
-          JSDOM_PATH: ${{ github.workspace }}/tests/mcp-sdk/node_modules/jsdom
+          JSDOM_PATH: ${{ github.workspace }}/tests/ui/node_modules/jsdom
         run: |
           node tests/pool-runtime.cjs
+          node tests/pool-symbol-context.cjs
+          node tests/edit-review.cjs
+          node tests/edit-generation.cjs
+          node tests/pool-mcp.cjs
           node tests/pool-resilience.cjs
           node tests/pool-progress.cjs
           node tests/pool-stream.cjs
           node tests/pool-stream-ui.cjs
+          node tests/chat-stream-ui.cjs
+          node tests/goal-runner.cjs
+          node tests/tool-loop.cjs
+          node tests/tool-commands.cjs
+          node tests/isabel-command.cjs
+          node tests/workspace-bindings.cjs
+          node tests/preview-capabilities.cjs
+          node tests/preview-assets.cjs
+          node tests/preview-browser.cjs
+          node tests/html-boundary.cjs
+          node tests/layout.mjs
+          node tests/frontend-modules.mjs
+          node tests/provider-utils.mjs
+          node tests/provider-client.mjs
+          node tests/pool-runner.mjs
+          node tests/project-store.mjs
+          node tests/project-ui.mjs
+          node tests/conversation-utils.mjs
+          node tests/appearance.cjs
+          node tests/themes.mjs
+          node tests/themes-ui.cjs
+          node tests/sidebar.cjs
+          node tests/notifications.cjs
+          node tests/cli-session-import.cjs
+          node tests/web-semantic-search.cjs
+          node tests/web-work-tracker.cjs
+          node tests/web-running-actions.cjs
+          node tests/cli-process-snapshot.cjs
+          node tests/server-capability-ui.cjs
+          node tests/workspace-auth-ui.cjs
+          node tests/encrypted-usage-ui.cjs
           node tests/provider-budget-ui.cjs
+          node tests/agents-workspace.cjs
+          node tests/project-workspace.cjs
           node tests/web-supervision.cjs
+          node tests/action-supervision.cjs
+          node tests/web-apply-edit.cjs
+          node tests/web-transaction.cjs
+          node tests/action-history.cjs
+          node tests/web-mcp.cjs
+      - name: Install sandbox runtime
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
       - name: Run Rust tests
         env:
           ISA_MCP_SDK_TEST: "1"
+          ISA_SANDBOX_TEST: "1"
         run: |
           set +e
-          cargo test --all-targets > /tmp/isa-tests.log 2>&1
+          cargo test --locked --all-targets > /tmp/isa-tests.log 2>&1
           result=$?
           cat /tmp/isa-tests.log
           if [ "$result" -ne 0 ]; then
@@ -43,14 +245,22 @@ jobs:
             echo "::error::Rust test diagnostics (base64): $encoded"
           fi
           exit "$result"
+      - name: Test pool MCP with real Rust supervisor
+        env:
+          JSDOM_PATH: ${{ github.workspace }}/tests/ui/node_modules/jsdom
+        run: |
+          cargo build --locked --bin isa
+          node tests/pool-mcp-e2e.cjs
+          node tests/tool-loop-e2e.cjs
       - name: Check release build
-        run: cargo build --release --all-targets
+        run: cargo build --locked --release --all-targets
       - name: Upload Linux binaries
         uses: actions/upload-artifact@v4
         with:
           name: isa-linux-binaries
           path: |
             target/release/isa
+            target/release/isa-cli
             target/release/isa-decoy
           if-no-files-found: error
-          retention-days: 1
+          retention-days: 7

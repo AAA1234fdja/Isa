@@ -1,0 +1,22 @@
+import assert from 'node:assert/strict';
+import {createProjectStore} from '../frontend/src/project-store.mjs';
+
+let value=JSON.stringify([{id:'p',name:'P',description:'D',chatIds:['c']},{id:1,name:'invalid',description:''}]), fail=false;
+const storage={getItem(key){assert.equal(key,'isa.preview.projects');if(fail)throw Error('denied');return value},setItem(key,content){assert.equal(key,'isa.preview.projects');if(fail)throw Error('denied');value=content}};
+const store=createProjectStore({getStorage:()=>storage});
+assert.equal(store.load(),true); assert.equal(store.list().length,1);
+const copy=store.list();copy.length=0;assert.equal(store.list().length,1);
+assert.equal(store.add({id:'q',name:'Q',description:'',chatIds:[]}),true);
+assert.equal(store.update('p',{name:'Updated'}),true);
+assert.deepEqual(store.list()[1].chatIds,['c']);
+assert.equal(store.remove('q'),true);
+assert.equal(JSON.parse(value).length,1);
+const saved=value;fail=true;
+assert.equal(store.add({id:'r',name:'R',description:''}),false);
+assert.equal(store.update('p',{name:'Failed'}),false);
+assert.equal(store.remove('p'),false);
+assert.equal(store.load(),false);
+assert.equal(store.list().length,1);assert.equal(store.list()[0].name,'Updated');assert.equal(value,saved);
+const other=createProjectStore({getStorage:()=>({getItem:()=>null,setItem(){}})});
+assert.equal(other.load(),true);assert.equal(other.list().length,0);
+console.log('Project store isolates instances and preserves in-memory state on storage failure');

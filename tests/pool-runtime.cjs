@@ -1,8 +1,8 @@
 // Dependency-free tests execute the actual browser routing functions in a VM.
 const assert=require('node:assert/strict'),vm=require('node:vm'),fs=require('node:fs');
-const html=fs.readFileSync('index.html','utf8');
+const html=require('./interface-fixture.cjs')();
 function extract(start,end){const a=html.indexOf(start),b=html.indexOf(end,a);assert(a>=0&&b>a);return html.slice(a,b)}
-const script=[extract('function validProviderEndpoint(', 'try{const list=JSON.parse(localStorage.getItem(customProviderKey)'),extract('function providerSecret(',"const pendingChats="),extract('function parseProviderUsage(', 'function tokenStats('),extract('async function withRequestTimeout(', 'async function requestServer('),extract('async function runAgentPool(', 'function updateRoutingLabel('),extract('function workflowGraph(', 'function openWorkflow(')].join('\n');
+const script=[fs.readFileSync('assets/provider-utils.js','utf8'),fs.readFileSync('assets/provider-client.js','utf8'),fs.readFileSync('assets/pool-runner.js','utf8'),extract('function validProviderEndpoint(', 'try{const list=JSON.parse(localStorage.getItem(customProviderKey)'),extract('function providerSecret(',"const pendingChats="),extract('function parseProviderUsage(', 'function tokenStats('),extract('async function withRequestTimeout(', 'async function requestServer('),extract('async function runAgentPool(', 'function updateRoutingLabel('),extract('function workflowGraph(', 'function openWorkflow(')].join('\n');
 const calls=[];let response=(host,body)=>({choices:[{message:{content:'answer'}}]});
 const env={URL,DOMException,AbortController,setTimeout,clearTimeout,JSON,Map,Set,Array,Number,String,Promise,sessionStorage:{getItem(){return ''}},customSecretPrefix:'key:',customProviders:[],agentPools:[],fetch:async(url,options)=>{let body=JSON.parse(options.body);calls.push({url,body});let data=response(url,body);return {ok:data.status===undefined,status:data.status||200,json:async()=>data}},console};vm.createContext(env);vm.runInContext(script,env);
 (async()=>{

@@ -2,4 +2,5 @@
 
 /.isa/
 
-/tests/mcp-sdk/node_modules/
+# npm dependencies are installed locally from lockfiles.
+node_modules/

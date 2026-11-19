@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const port = Number(process.env.PORT || 4174);
-const types = {'.html': 'text/html; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8'};
+const types = {'.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.js':'text/javascript; charset=utf-8', '.mjs':'text/javascript; charset=utf-8'};
 function respond(response, status, type, body, head = false) {
   response.writeHead(status, {'Content-Type': type, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'});
   response.end(head ? undefined : body);
@@ -15,7 +15,7 @@ http.createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/api/chat-options') {
     const host=request.headers.host||'', origin=request.headers.origin||'', type=(request.headers['content-type']||'').split(';')[0].trim();
     if (!host || !['http://'+host,'https://'+host].includes(origin) || type !== 'application/json') return respond(response,403,'application/json','{"error":"Same-origin JSON request required"}');
-    try { const catalog=JSON.parse(await readFile(path.join(root,'plugins/catalog-preview.json'),'utf8')); return respond(response,200,'application/json',JSON.stringify({ollamaConfigured:false,pluginRuntime:false,symbolLookupAvailable:false,catalog})); }
+    try { const catalog=JSON.parse(await readFile(path.join(root,'plugins/catalog-preview.json'),'utf8')); return respond(response,200,'application/json',JSON.stringify({backendKind:"node-preview",localActionsPlatformSupported:false,localActionsWindowsReadOnly:false,localActionsWindowsShellExperimental:false,ollamaConfigured:false,pluginRuntime:false,agentLoopAvailable:false,symbolLookupAvailable:false,catalog})); }
     catch { return respond(response,503,'application/json','{"error":"Plugin catalog unavailable"}'); }
   }
   if (request.method === 'POST' && url.pathname === '/api/symbols') {
@@ -49,7 +49,7 @@ http.createServer(async (request, response) => {
   }
   if (request.method !== 'GET' && request.method !== 'HEAD') return respond(response, 405, 'text/plain', 'Method not allowed');
   const file = url.pathname === '/' ? '/index.html' : url.pathname;
-  if (file !== '/index.html' && file !== '/assets/isa-logo.png' && file !== '/assets/isa-logo-transparent.png' && !['/assets/vendor/pdf.min.mjs','/assets/vendor/pdf.worker.min.mjs','/assets/vendor/mammoth.browser.js'].includes(file) && !/^\/assets\/providers\/[a-z-]+\.svg$/.test(file)) return respond(response, 404, 'text/plain', 'Not found');
+  if (file !== '/index.html' && file !== '/assets/interface.css' && file !== '/assets/interface.js' && file !== '/assets/preview.js' && file !== '/assets/layout.js' && file !== '/assets/appearance.js' && file !== '/assets/sidebar.js' && file !== '/assets/notifications.js' && file !== '/assets/provider-utils.js' && file !== '/assets/conversation-utils.js' && file !== '/assets/provider-client.js' && file !== '/assets/pool-runner.js' && file !== '/assets/project-store.js' && file !== '/assets/project-ui-module.js' && file !== '/assets/supervised-actions.js' && file !== '/assets/attachments.js' && file !== '/assets/projects.js' && file !== '/assets/settings.js' && file !== '/assets/agents.js' && file !== '/assets/routing.js' && file !== '/assets/chat.js' && file !== '/assets/isa-logo.png' && file !== '/assets/isa-logo-transparent.png' && !['/assets/vendor/pdf.min.mjs','/assets/vendor/pdf.worker.min.mjs','/assets/vendor/mammoth.browser.js'].includes(file) && !/^\/assets\/providers\/[a-z-]+\.svg$/.test(file)) return respond(response, 404, 'text/plain', 'Not found');
   try {
     const body = await readFile(path.join(root, file));
     respond(response, 200, types[path.extname(file)] || 'application/octet-stream', body, request.method === 'HEAD');

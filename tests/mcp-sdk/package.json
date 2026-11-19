@@ -6,8 +6,5 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
     "zod": "3.25.76"
-  },
-  "devDependencies": {
-    "jsdom": "26.1.0"
   }
 }

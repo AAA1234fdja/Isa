@@ -27,8 +27,14 @@ fn excerpt(content: &str, terms: &HashSet<String>) -> String {
     let mut selected = Vec::new();
     for (index, line) in content.lines().enumerate() {
         if tokens(line).iter().any(|word| terms.contains(word)) {
-            selected.push(format!("{}: {}", index + 1, line.chars().take(200).collect::<String>()));
-            if selected.len() == 3 { break; }
+            selected.push(format!(
+                "{}: {}",
+                index + 1,
+                line.chars().take(200).collect::<String>()
+            ));
+            if selected.len() == 3 {
+                break;
+            }
         }
     }
     selected.join("\n")
@@ -36,16 +42,26 @@ fn excerpt(content: &str, terms: &HashSet<String>) -> String {
 
 pub fn rank(root: &Path, query: &str, limit: usize) -> Result<Vec<RankedFile>> {
     let terms: HashSet<String> = tokens(query).into_iter().take(MAX_QUERY_TERMS).collect();
-    if terms.is_empty() { return Err("query must contain at least one searchable word".into()); }
+    if terms.is_empty() {
+        return Err("query must contain at least one searchable word".into());
+    }
     let mut documents = Vec::new();
     let mut frequencies: HashMap<String, usize> = HashMap::new();
     for path in repository::files(root)?.into_iter().take(MAX_INDEXED) {
         let absolute = root.join(&path);
         let metadata = match fs::symlink_metadata(&absolute) {
-            Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() <= MAX_FILE_BYTES => metadata,
+            Ok(metadata)
+                if metadata.is_file()
+                    && !metadata.file_type().is_symlink()
+                    && metadata.len() <= MAX_FILE_BYTES =>
+            {
+                metadata
+            }
             _ => continue,
         };
-        if metadata.len() == 0 { continue; }
+        if metadata.len() == 0 {
+            continue;
+        }
         let content = match fs::read_to_string(&absolute) {
             Ok(content) if !content.contains('\0') => content,
             _ => continue,
@@ -53,9 +69,13 @@ pub fn rank(root: &Path, query: &str, limit: usize) -> Result<Vec<RankedFile>> {
         let words = tokens(&content);
         let mut counts = HashMap::<String, usize>::new();
         for word in words.iter().take(MAX_TOKENS_PER_FILE) {
-            if terms.contains(word) { *counts.entry(word.clone()).or_default() += 1; }
+            if terms.contains(word) {
+                *counts.entry(word.clone()).or_default() += 1;
+            }
         }
-        for word in counts.keys() { *frequencies.entry(word.clone()).or_default() += 1; }
+        for word in counts.keys() {
+            *frequencies.entry(word.clone()).or_default() += 1;
+        }
         documents.push((path, content, counts, words.len().min(MAX_TOKENS_PER_FILE)));
     }
     let total = documents.len() as f64;
@@ -68,10 +88,18 @@ pub fn rank(root: &Path, query: &str, limit: usize) -> Result<Vec<RankedFile>> {
             score += (1.0 + (*count as f64).ln()) * idf / (1.0 + (length as f64 / 1000.0).ln_1p());
         }
         if score > 0.0 {
-            results.push(RankedFile { path, score, excerpt: excerpt(&content, &terms) });
+            results.push(RankedFile {
+                path,
+                score,
+                excerpt: excerpt(&content, &terms),
+            });
         }
     }
-    results.sort_by(|a, b| b.score.total_cmp(&a.score).then_with(|| a.path.cmp(&b.path)));
+    results.sort_by(|a, b| {
+        b.score
+            .total_cmp(&a.score)
+            .then_with(|| a.path.cmp(&b.path))
+    });
     results.truncate(limit.min(100));
     Ok(results)
 }
@@ -82,13 +110,19 @@ mod tests {
 
     #[test]
     fn tokenization_is_case_insensitive() {
-        assert_eq!(tokens("Hello, HELLO_world! x"), vec!["hello", "hello_world"]);
+        assert_eq!(
+            tokens("Hello, HELLO_world! x"),
+            vec!["hello", "hello_world"]
+        );
     }
 
     #[test]
     fn excerpt_reports_line_numbers() {
         let terms = HashSet::from(["needle".to_string()]);
-        assert_eq!(excerpt("first\nNeedle here\nlast", &terms), "2: Needle here");
+        assert_eq!(
+            excerpt("first\nNeedle here\nlast", &terms),
+            "2: Needle here"
+        );
     }
 
     #[test]
@@ -107,7 +141,9 @@ pub fn pack(root: &Path, query: &str) -> Result<serde_json::Value> {
     for result in results {
         let path = result.path.to_string_lossy().into_owned();
         let overhead = path.chars().count();
-        if overhead >= remaining { break; }
+        if overhead >= remaining {
+            break;
+        }
         remaining -= overhead;
         let excerpt: String = result.excerpt.chars().take(remaining).collect();
         remaining -= excerpt.chars().count();
@@ -116,7 +152,9 @@ pub fn pack(root: &Path, query: &str) -> Result<serde_json::Value> {
             "score": result.score,
             "excerpt": excerpt,
         }));
-        if remaining == 0 { break; }
+        if remaining == 0 {
+            break;
+        }
     }
     Ok(serde_json::json!({
         "version": 1,
@@ -136,7 +174,11 @@ mod pack_tests {
 
     #[test]
     fn pack_limits_sources_and_marks_them_untrusted() {
-        let path = std::env::temp_dir().join(format!("isa-pack-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let path = std::env::temp_dir().join(format!(
+            "isa-pack-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir(&path).unwrap();
         fs::write(path.join("one.rs"), "fn token_example() { token(); }\n").unwrap();
         let packed = pack(&path, "token").unwrap();

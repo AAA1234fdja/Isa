@@ -6,8 +6,8 @@ Auto tries server-configured Ollama first, then the saved custom providers in
 stored order if the server is unavailable. Ollama requires `ISA_WEB_MODEL` on
 the Rust server. With no usable provider the request returns an error.
 
-Custom providers use the OpenAI-compatible, non-streaming chat-completions
-request and response format. Enter the **full** public HTTPS endpoint (for
+Custom providers use the OpenAI-compatible chat-completions format; streaming
+is optional and off by default. Enter the **full** public HTTPS endpoint (for
 example, `https://example.com/v1/chat/completions`), a model identifier, a
 display name, and optionally a bearer API key. URLs containing credentials,
 query parameters, fragments, localhost, local hostnames, or IP literals are
@@ -178,15 +178,18 @@ occurs, or final synthesis fails, the pool may still fail. Cancellation aborts
 browser requests and retry waits but may not stop remote computation. Pool
 can optionally stream the final pool response with OpenAI-compatible SSE: enable
 **Stream final pool response** in the specific provider settings only when that
-provider and model support it. It is off by default. Planning, intermediate
-agents, direct chats, goal/summary helpers and final responses from a parallel
-group with only one surviving agent remain non-streaming. Streaming requires
+provider and model support it. It is off by default. Planning, intermediate agents, goal/summary helpers and final responses from a
+parallel group with only one surviving agent remain non-streaming. Direct chat
+can separately opt in using **Stream ordinary chat responses** in the selected
+provider settings; this does not enable streaming for Auto fallback or helpers. Streaming requires
 normal `stop` and `[DONE]` markers; truncated, malformed or unsupported streams
 fail rather than becoming completed answers. Provisional text is displayed only
 in the active chat and is never saved on interruption, Stop or failure. ISA does
 not retry a stream once visible text was received. Provider usage may be missing
-from streamed responses, and CORS must permit SSE. This has been tested with
-simulated providers, not real provider endpoints.
+from streamed responses, and CORS must permit SSE. Direct chat requests go from
+the browser to the provider; Stop aborts the browser request but does not
+guarantee the remote provider stops computation. This has been tested with
+simulated providers, not real provider endpoints or Rust server streaming.
 
 While a pool is running, the chat displays live, transient status for provider
 requests, retries and pending request count. Status is per chat, not a model
@@ -225,7 +228,7 @@ Browser routing regression tests (mocked providers, no real API calls): start
 then run `node tests/browser-routing.cjs` and
 `node tests/browser-routing-errors.cjs`, `node tests/browser-pool-workflow.cjs`,
 `node tests/browser-subagent-on-demand.cjs`, `node tests/browser-context-tokens.cjs`,
-and `node tests/browser-context-errors.cjs`. The dependency-free runtime regressions can be run with `node tests/pool-runtime.cjs` and `node tests/pool-resilience.cjs` and `node tests/pool-stream.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
+and `node tests/browser-context-errors.cjs`. The dependency-free runtime regressions can be run with `node tests/pool-runtime.cjs` and `node tests/pool-resilience.cjs` and `node tests/pool-stream.cjs`. The ordinary-chat streaming UI regression uses `node tests/chat-stream-ui.cjs`. The provider/workflow form regression uses jsdom and can be run with `node tests/provider-budget-ui.cjs` (install jsdom outside the repository and set `JSDOM_PATH` if needed). Set `PLAYWRIGHT_CORE`, `CHROMIUM_PATH`,
 and optionally `ISA_TEST_URL` to match the local installation.
 
 
