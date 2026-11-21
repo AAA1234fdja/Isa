@@ -26,8 +26,9 @@ solution before desktop packaging.
    access. Do not assume loopback, embedded assets or a WebView are a sandbox.
 2. Design desktop-to-backend authentication, startup and shutdown, including
    port ownership, multiple instances, abnormal exits, network requests and
-   user-visible errors. Inherited environment variables must not silently
-   enable experimental actions. Do not put secrets in URLs or logs.
+   user-visible errors. The prototype accepts only selected, valid workspace
+   settings and asks for confirmation before starting with them; this flow
+   still requires Windows testing. Do not put secrets in URLs or logs.
 3. Choose stable application storage, credential handling and an explicit
    migration/export story for existing browser data. A folder chosen in the
    interface is not automatically a server workspace.

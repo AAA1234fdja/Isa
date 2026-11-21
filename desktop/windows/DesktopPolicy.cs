@@ -12,12 +12,45 @@ internal static class DesktopPolicy
 
     internal static void ConfigureBackend(ProcessStartInfo info)
     {
+        // Forward only explicit configuration for the supervised experimental
+        // features. Arbitrary inherited ISA settings remain blocked.
+        info.Environment.TryGetValue("ISA_WEB_EXEC_WORKSPACE", out string? workspace);
+        info.Environment.TryGetValue("ISA_WEB_EXEC_TOKEN", out string? token);
+        info.Environment.TryGetValue("ISA_WEB_EXEC_PROFILE", out string? profile);
+        info.Environment.TryGetValue("ISA_WEB_AGENT_WORKSPACE", out string? agentWorkspace);
+        info.Environment.TryGetValue("ISA_WEB_MODEL", out string? model);
         foreach (string key in info.Environment.Keys.ToArray())
             if (key.StartsWith("ISA_", StringComparison.OrdinalIgnoreCase))
                 info.Environment.Remove(key);
         info.Environment["ISA_ADDRESS"] = Address;
         info.Environment["ISA_ASSET_MODE"] = "embedded";
+        // These switches enable only already-connected Windows implementations;
+        // workspace, token, per-chat policy and user approvals remain required.
+        info.Environment["ISA_WEB_WINDOWS_READ_ONLY"] = "1";
+        info.Environment["ISA_WEB_WINDOWS_SHELL_EXPERIMENTAL"] = "1";
+        info.Environment["ISA_WEB_AUDIT_ENCRYPTED"] = "1";
+        info.Environment["ISA_WEB_WINDOWS_AUDIT_EXPERIMENTAL"] = "1";
+        if (IsWorkspace(workspace) && IsToken(token))
+        {
+            info.Environment["ISA_WEB_EXEC_WORKSPACE"] = workspace!;
+            info.Environment["ISA_WEB_EXEC_TOKEN"] = token!;
+            // Never discard an explicit sandbox request and silently run on
+            // the host. Unsupported or malformed values fail closed in Rust.
+            if (profile is not null)
+                info.Environment["ISA_WEB_EXEC_PROFILE"] = profile.Length <= 256 ? profile : "invalid";
+        }
+        if (IsWorkspace(agentWorkspace) && !string.IsNullOrWhiteSpace(model) && model.Length <= 256 && !model.Any(char.IsControl))
+        {
+            info.Environment["ISA_WEB_AGENT_WORKSPACE"] = agentWorkspace!;
+            info.Environment["ISA_WEB_MODEL"] = model;
+        }
     }
+
+    private static bool IsWorkspace(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && Path.IsPathFullyQualified(value) && Directory.Exists(value);
+
+    private static bool IsToken(string? value) =>
+        value is { Length: >= 32 and <= 256 } && value.All(c => c is >= '!' and <= '~');
 
     internal static bool IsAllowedNavigation(string? target)
     {

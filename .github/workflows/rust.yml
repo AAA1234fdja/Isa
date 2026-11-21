@@ -22,6 +22,27 @@ jobs:
           dotnet-version: '8.0.x'
       - name: Test desktop navigation and backend configuration
         run: dotnet run --project desktop/tests/DesktopPolicy.Tests.csproj --configuration Release
+      - name: Test Hyper-V lifecycle identity and teardown with mocks
+        shell: pwsh
+        run: ./desktop/windows/test-hyperv-lifecycle.ps1
+      - name: Test PowerShell Direct diagnostic with mocks
+        shell: powershell
+        run: ./desktop/windows/test-hyperv-channel.ps1
+      - name: Parse PowerShell Direct diagnostic without opening a guest session
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path desktop/windows/hyperv-channel-check.ps1), [ref]$tokens, [ref]$errors)
+          if ($errors.Count -ne 0) { throw "PowerShell Direct diagnostic has parse errors" }
+      - name: Check read-only sandbox diagnostics
+        shell: pwsh
+        run: |
+          $report = & ./desktop/windows/check-sandbox.ps1 | ConvertFrom-Json
+          if ($report.schemaVersion -ne 1 -or $report.platform -ne 'Windows' -or
+              -not $report.diagnosticOnly -or $report.sandboxImplemented) {
+            throw 'Invalid sandbox diagnostic report'
+          }
       - name: Build desktop backend
         run: cargo build --locked --release --bin isa
       - name: Publish desktop prototype
@@ -32,6 +53,7 @@ jobs:
           Copy-Item target/release/isa.exe desktop-prototype/isa.exe
           Copy-Item LICENSE desktop-prototype/LICENSE
           Copy-Item desktop/windows/README.md desktop-prototype/README.md
+          Copy-Item desktop/windows/check-sandbox.ps1 desktop-prototype/check-sandbox.ps1
       - name: Build unsigned prototype installer
         shell: pwsh
         run: |

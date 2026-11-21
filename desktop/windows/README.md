@@ -33,6 +33,7 @@ Install Inno Setup 6 on Windows and build the published folder as above. Copy
 ```powershell
 Copy-Item LICENSE desktop-prototype/LICENSE
 Copy-Item desktop/windows/README.md desktop-prototype/README.md
+Copy-Item desktop/windows/check-sandbox.ps1 desktop-prototype/check-sandbox.ps1
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" desktop/windows/installer.iss
 if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
 ```
@@ -59,10 +60,16 @@ or a security review.
 - The wrapper starts its own bundled backend at `127.0.0.1:4175` in embedded
   asset mode. It checks the backend's startup message and refuses to connect if
   the port is already occupied. It does not reuse the development server.
-- All inherited `ISA_` environment settings are removed. Workspace access,
-  experimental shell and local-model server configuration are therefore not
-  enabled by this wrapper; a future reviewed configuration flow is required.
-  Custom providers configured directly in the UI remain separate.
+- The wrapper enables the existing experimental Windows read-only, manual shell,
+  and encrypted-audit switches. It forwards only explicitly configured valid
+  workspace/token and optional Ollama model/workspace pairs, plus any explicit
+  execution profile with a valid workspace/token; other inherited `ISA_`
+  settings are removed. Unsupported profiles fail closed rather than falling
+  back to host execution. Without those pairs the corresponding actions
+  remain unavailable. Per-chat supervision and the token are still required.
+  This configuration is unvalidated on Windows; see
+  [experimental desktop review](../../docs/desktop-experimental-review.md) for
+  activation, limitations, and risks. Custom providers remain separate.
 - The desktop window and frames remain restricted to the local origin. A
   user-initiated HTTPS link may be opened in the default browser only after a
   confirmation showing the destination; other external navigation is blocked.

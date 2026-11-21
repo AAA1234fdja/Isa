@@ -661,3 +661,62 @@ fn windows_experimental_encrypted_audit_survives_restart_and_degrades_without_ke
     assert_eq!(status, 200);
     assert_eq!(result["auditWarning"], "both_incomplete");
 }
+
+#[test]
+fn windows_sandbox_profile_never_falls_back_to_host_shell() {
+    use serde_json::json;
+    let root = std::env::temp_dir().join(format!(
+        "isa-windows-sandbox-denied-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir(&root).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap().to_string();
+    drop(listener);
+    let child = Command::new(env!("CARGO_BIN_EXE_isa"))
+        .current_dir(&root)
+        .env("ISA_ADDRESS", &address)
+        .env("ISA_WEB_EXEC_TOKEN", TOKEN)
+        .env("ISA_WEB_EXEC_WORKSPACE", &root)
+        .env("ISA_WEB_WINDOWS_SHELL_EXPERIMENTAL", "1")
+        .env("ISA_WEB_EXEC_PROFILE", "sandboxed")
+        .env_remove("ISA_WEB_AUDIT_ENCRYPTED")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut server = Server {
+        child,
+        root,
+        address,
+    };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        assert!(server.child.try_wait().unwrap().is_none());
+        if TcpStream::connect(&server.address).is_ok() {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    let (_, options) = server.post("/api/chat-options", json!({}), "");
+    assert_eq!(options["windowsSandboxAvailable"], false);
+    for (path, body) in [
+        ("/api/exec/policy", json!({"chat":"a","mode":"never"})),
+        (
+            "/api/exec/prepare",
+            json!({"chat":"a","command":"'unsafe' | Set-Content host-marker.txt"}),
+        ),
+        (
+            "/api/exec/run",
+            json!({"chat":"a","id":"invalid","approved":true}),
+        ),
+    ] {
+        assert_eq!(server.post(path, body, TOKEN).0, 503, "{path}");
+    }
+    assert!(!server.root.join("host-marker.txt").exists());
+}

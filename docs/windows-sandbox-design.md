@@ -95,8 +95,9 @@ presence proves the policy is enforced.
    side effects reverted solely because a stop was requested.
 
 Backend-specific APIs, image identity, authenticated transport, administrative
-privileges and supported host versions are **design work still to be verified**;
-there is no current provisioning or guest agent implementation.
+privileges and supported host versions are **work still to be verified**. A
+manual Hyper-V lifecycle prototype is described below; it is not integrated
+with ISA and there is no guest agent implementation.
 
 ### Backend investigation milestones
 
@@ -109,7 +110,7 @@ there is no current provisioning or guest agent implementation.
   code cannot be treated as a trusted authority after untrusted commands run.
   Do not map the host workspace as a shortcut; no suitable copy/return channel
   has been demonstrated yet.
-- **Hyper-V VM:** prototype provisioning a pinned guest image and per-instance
+- **Hyper-V VM:** validate provisioning a pinned guest image and per-instance
   disposable disk, authenticated broker endpoint and teardown by an immutable
   VM identifier. Microsoft documents administrative or Hyper-V Administrators
   membership for VM creation [6]; switch creation may require administrative
@@ -252,6 +253,15 @@ rejection of truncated or invalid messages. The format is a prototype, not a
 stable protocol. It does not provide authentication, transport, partial-write
 handling, message validation or deadlines.
 
+Two additional staged modules are `src/cli/windows_sandbox_lifecycle.rs`, a
+pure state machine for approval, provisioning, execution and confirmed cleanup,
+and `src/cli/windows_sandbox_protocol.rs`, a bounded parser for selected
+versioned guest messages. An unconfirmed teardown or interruption after
+execution starts is reported as an unknown outcome. Instance IDs and parsed
+messages do not authenticate a guest or prove isolation; host-side verification
+and a secure transport remain necessary. These modules and their tests have not
+been compiled or run in the current environment.
+
 These components are compiled as test-only CLI modules and are included in the
 proposed Windows CI test list; they are **not connected to any execution, export
 or import path**. `src/cli/windows_sandbox_wsb.rs` provides only a static,
@@ -266,8 +276,16 @@ They do not touch the filesystem, establish trusted snapshots or object types,
 handle non-ASCII filesystem aliases, or prevent reparse-point and replacement
 races. They cannot authorize or safely perform a copy or import on their own.
 Safe handle-based traversal, copying and rechecking, separately approved import,
-filesystem conflict handling, undo integration and both guest backends remain
-unimplemented.
+filesystem conflict handling, undo integration and both integrated guest
+backends remain unimplemented.
+
+`desktop/windows/check-sandbox.ps1` is a read-only Windows prerequisite
+report. It queries OS, virtualization, optional feature and Hyper-V switch
+availability without creating or changing a VM, switch or guest. Unknown checks
+are not failures or proof of availability, and positive indicators do not prove
+that ISA's sandbox works. Run it on a Windows test machine with
+`powershell -NoProfile -File desktop/windows/check-sandbox.ps1`. Its Windows CI
+smoke check is configured but has not yet run for these changes.
 
 Next, validate each backend's real prerequisites and automation, and design
 handle-based export/import and identity checks before wiring in any execution.
@@ -294,3 +312,119 @@ Open decisions:
 5. [Microsoft: Naming files, paths, and namespaces](https://learn.microsoft.com/en-us/windows/win32/fileio/naming-a-file).
 6. [Microsoft: Create a virtual machine in Hyper-V](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/get-started/create-a-virtual-machine-in-hyper-v).
 7. [Microsoft: Create a Hyper-V virtual switch](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/get-started/create-a-virtual-switch-for-hyper-v-virtual-machines).
+
+## Manual Hyper-V lifecycle prototype (not integrated)
+
+`desktop/windows/hyperv-lifecycle.ps1` is a standalone, **untested** manual
+prototype for creating and removing one Hyper-V VM; it is not the ISA sandbox
+backend. It requires a trusted Windows test host, the Hyper-V PowerShell module,
+appropriate administrator/Hyper-V permissions, a compatible licensed Generation
+2 VHDX image, and an existing local directory controlled by the user. No guest
+agent, identity-attested channel, workspace export/import, command dispatch,
+resource enforcement or ISA approval integration is implemented. Starting a
+VM does not establish that isolation or networking works as requested.
+
+The `Create` operation checks a caller-supplied SHA-256 of the base VHDX,
+creates a per-instance directory and differencing disk, creates a VM with a
+random instance name and marker, and asks for confirmation before starting.
+If an existing switch ID is explicitly supplied, it attaches that switch;
+otherwise it uses no switch. An attached switch can expose host, LAN and
+internet services; its effective reachability is not verified. It never creates
+or changes a switch and does not attach the ISA workspace. Hash/path/reparse
+checks are best-effort and do not pin a file handle or protect against local
+races, image modification, aliases, malicious administrators, or untrusted local
+processes. The base image and instance root must remain trusted and protected.
+
+The `Destroy` operation requires both returned IDs, compares the exact VM ID,
+name and marker, asks for confirmation, turns off that VM and removes it. The
+marker guards against accidental mistakes, not malicious local impersonation.
+Removal is not independently verified. **It deliberately leaves all disks and
+folders behind**: they may contain guest data, occupy space, and require manual
+inspection and cleanup by the user. If provisioning fails or the host crashes,
+VMs and files may remain. Inspect Hyper-V Manager and the reported folder;
+never bulk-delete based on a name prefix. No existing VM, switch or unrelated
+disk should be altered. These protections have not been validated in Windows.
+
+Example for a disposable test machine, using a VHDX and expected digest obtained
+through a trusted channel (replace the example values). Run PowerShell with the
+permissions needed by Hyper-V. Both operations request confirmation by default.
+
+```powershell
+$vm = & .\desktop\windows\hyperv-lifecycle.ps1 -Action Create `
+    -BaseVhdx 'C:\ISA-Test\trusted-base.vhdx' `
+    -BaseSha256 '<64-character trusted SHA-256>' `
+    -InstanceRoot 'C:\ISA-Test\instances'
+$vm | Format-List
+# Keep both IDs. Review them before this destructive operation:
+& .\desktop\windows\hyperv-lifecycle.ps1 -Action Destroy `
+    -VmId $vm.VmId -InstanceId $vm.InstanceId
+```
+
+For networking, separately inspect `Get-VMSwitch` and pass `-SwitchId` with
+the GUID of a specific existing switch during `Create`. Choosing a switch does
+not ensure host/LAN/internet reachability and may expose internal services.
+`-WhatIf` avoids the VM mutation steps; creation validation still reads the
+base image and computes its hash. Do not pass API keys or workspaces to the VM.
+
+The mock-only `desktop/windows/test-hyperv-lifecycle.ps1` tests identity checks,
+rejection of a foreign VM, `-WhatIf`, and the teardown command sequence. CI is
+configured to run these tests, but this checkout has not been tested in
+PowerShell, against Hyper-V, or on Windows. It does not test actual VM creation,
+resource limits, crashes, network, disk cleanup or adversarial path races. Those
+checks and a design review are prerequisites to integrating the helper with ISA.
+
+### PowerShell Direct diagnostic and transfer receiver
+
+`desktop/windows/hyperv-channel-check.ps1` is an **untested standalone manual
+connection diagnostic** for a running ISA-labeled Hyper-V VM. It checks the
+instance marker, asks for confirmation and prompts locally for credentials of a
+dedicated disposable guest account, then opens a PowerShell Direct session by
+VM ID, runs one fixed diagnostic expression, and closes the session. It does
+not save credentials, copy files or connect the session to ISA. Use Windows
+PowerShell 5.1 on the host; the guest and host must support PowerShell Direct.
+See [Microsoft's PowerShell Direct documentation](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/powershell-direct).
+
+```powershell
+powershell -NoProfile -File .\desktop\windows\hyperv-channel-check.ps1 `
+    -VmId <vm-guid> -InstanceId <instance-guid>
+```
+
+Replace the two placeholders with the IDs produced by the lifecycle prototype.
+Do not use a host or domain credential: a guest may be compromised. A successful
+session authenticates an account to the guest; the VM marker and the guest's
+reply do not attest guest integrity, authenticate arbitrary guest output, or
+prove isolation. There is no bounded operation deadline, cleanup guarantee on
+crash, or end-to-end validation yet. `test-hyperv-channel.ps1` supplies mock-only
+checks for identity rejection, `-WhatIf` and session closure, with a Windows CI
+step configured; those checks have not run for these changes. Never use this
+diagnostic as a production channel or as authority to import files.
+
+`src/cli/windows_sandbox_transfer.rs` adds a staged in-memory receiver for an
+inventory and file chunks, with lexical path and resource limits and length and
+digest checks. `src/cli/windows_sandbox_changes.rs` converts a completed
+received inventory and a caller-supplied host baseline into a bounded,
+deterministically ordered write/delete proposal and review digest; it can also
+feed the existing conflict checker. Guest omissions become proposed deletions,
+not automatic deletions. Directory operations are not represented. Tests cover
+protected paths, duplicates, truncation, corrupted content, baseline conflicts,
+case mismatches and review-digest changes. These components are not wired to
+PowerShell Direct or the VM, are compiled only in tests and have not been run in
+this environment. Digests supplied by an untrusted guest only detect transfer
+errors; they do not establish trust.
+`src/cli/windows_sandbox_wire.rs` connects framed, bounded, versioned transfer
+messages to the in-memory receiver in tests; the instance identifier is not
+peer authentication. The current frame-stream budget is 4 MiB, including JSON
+and base64 overhead. This is a protocol exercise, not a VM connection.
+
+PowerShell Direct's documented `New-PSSession -VMId` parameter set does not
+include `-SessionOption`; the normal `MaximumReceivedObjectSize` and
+`MaximumReceivedDataSizePerCommand` settings cannot simply be passed there.
+We have not established that incoming guest serialization, operation deadlines,
+and cancellation can be bounded for this transport. Until those properties
+are demonstrated or a different authenticated bounded transport is used, no
+guest workspace data is accepted by the runtime.
+Successful reception is not approval to write files. A real copy/import still
+requires handle-based source and destination validation, secure credential and
+session lifecycle, separate review and approval, conflict rechecking, undo,
+cleanup, and Windows adversarial testing. The runtime `sandboxed` profile
+remains unavailable on Windows and must not fall back to host execution.

@@ -31,6 +31,9 @@ internal sealed class MainWindow : Form
             smokeTimer.Start();
         }
         Text = "ISA — Desktop prototype";
+        // The published executable carries the same multi-resolution icon as its shortcuts.
+        if (Environment.ProcessPath is string executable)
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(executable);
         Width = 1280;
         Height = 820;
         MinimumSize = new System.Drawing.Size(800, 600);
@@ -143,6 +146,14 @@ internal sealed class MainWindow : Form
         // Do not inherit configuration that could enable local actions,
         // expose the server, or select a workspace without user approval.
         DesktopPolicy.ConfigureBackend(info);
+        if (!smokeTest && (info.Environment.ContainsKey("ISA_WEB_EXEC_TOKEN") ||
+            info.Environment.ContainsKey("ISA_WEB_MODEL")))
+        {
+            const string warning = "Experimental workspace features are configured. Manual PowerShell commands run with your Windows permissions and network, without a sandbox. Audit may be incomplete. Existing chat approvals still apply. Continue?";
+            if (MessageBox.Show(this, warning, "Experimental workspace features",
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+                throw new InvalidOperationException("Experimental workspace configuration was not approved.");
+        }
 
         backend = new Process { StartInfo = info, EnableRaisingEvents = true };
         backend.Exited += BackendExited;

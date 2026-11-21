@@ -12,16 +12,16 @@ example, `https://example.com/v1/chat/completions`), a model identifier, a
 display name, and optionally a bearer API key. URLs containing credentials,
 query parameters, fragments, localhost, local hostnames, or IP literals are
 rejected. Redirects are rejected. Providers with other protocols, custom
-headers, query-string authentication, or endpoints that do not permit browser
-CORS are not supported. Image attachments use OpenAI-compatible image URLs and
+headers or query-string authentication are not supported. Except for the
+xKiro bridge described below, endpoints must permit browser CORS. Image attachments use OpenAI-compatible image URLs and
 require a vision-capable model; extracted document text is sent as untrusted
 reference data. Follow the provider's terms, privacy policy, and model limits.
 
-Requests to a custom provider go **directly from the user's browser** to the
-configured endpoint with `credentials: omit`, no referrer, and no redirects.
-The server and its Rust harness, plugins, and Ollama routing are bypassed;
-the browser must be able to reach the provider and its CORS policy must allow
-the request. This means custom-provider requests do not receive the automatic
+Except for the xKiro endpoint described below, requests to a custom provider go
+**directly from the user's browser** to the configured endpoint with
+`credentials: omit`, no referrer, and no redirects. The server and its Rust
+harness, plugins, and Ollama routing are bypassed; the browser must be able to
+reach the provider and its CORS policy must allow the request. This means custom-provider requests do not receive the automatic
 plugin skill excerpts currently implemented for the Rust/Ollama path. Stopping
 a request aborts the browser request but cannot guarantee remote computation
 has stopped.
@@ -48,6 +48,14 @@ supported by ISA, or that it permits browser CORS. “Set up” opens the custom
 endpoint. Users must verify the URL and supply a model and any needed key.
 Ollama is the sole built-in option currently.
 
+Additional endpoint references: [Baseten](https://docs.baseten.co/reference/inference-api/chat-completions),
+[Hugging Face](https://huggingface.co/docs/inference-providers/en/guides/gpt-oss),
+[Nscale](https://docs.nscale.com/docs/use-cases/chat), and
+[Scaleway](https://www.scaleway.com/en/developers/api/generative-apis).
+These are suggestions, not connectivity or CORS guarantees. Some services require
+account-specific, regional, deployment-specific or non-compatible endpoints;
+those entries intentionally do not have a universal URL.
+
 Directory references: [LiteLLM provider list](https://github.com/BerriAI/litellm#supported-providers)
 and [AI inference providers comparison](https://infrabase.ai/blog/ai-inference-api-providers-compared).
 Provider names and API capabilities can change; recheck official documentation
@@ -56,7 +64,8 @@ before configuring a provider.
 The directory now includes xKiro and offers editable URL suggestions for
 providers with documented public Chat Completions endpoints. The full model ID
 and any API key must still be supplied, and browser CORS support has not been
-verified. No endpoint is auto-connected. Saving a provider or creating an Agent
+verified. The exact xKiro endpoint uses the experimental local bridge below.
+No endpoint is auto-connected. Saving a provider or creating an Agent
 Pool does not test connectivity: the first request can still fail. For xKiro,
 use `https://api.xkiro.com/v1/chat/completions` as the full endpoint and verify
 the model ID against its current catalog. If a request fails with the generic
@@ -264,3 +273,59 @@ then positive totals up to 100K, over 100K–1M, over 1M–10M, over 10M–200M,
 200M–1B and over 1B use levels 1–6 respectively. A day with unreported calls
 may be undercounted. Counts, summaries, plans and messages are stored locally
 in the browser; they are not billing records.
+
+### Directory entries without a universal URL
+
+The setup form accepts public HTTPS Chat Completions URLs and bearer tokens,
+not arbitrary native APIs. These examples are documentation, not values that
+can be submitted unchanged. CORS and model access are not verified.
+
+- [Amazon Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html): regional endpoint and Bedrock API key or SigV4; ISA does not sign AWS requests.
+- [Azure AI Foundry](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/reasoning): URL depends on the resource and deployment; authentication varies.
+- [Cloudflare Workers AI](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/): URL requires an account ID.
+- [Databricks](https://docs.databricks.com/gcp/en/agents/custom-agents/query-agent): URL requires a workspace and a compatible serving endpoint.
+- [Deepgram](https://developers.deepgram.com/docs/voice-agent-llm-models): its voice agent can call an OpenAI-compatible LLM; that does not establish a Deepgram Chat Completions URL for ISA.
+- [Google Vertex AI](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/migrate/openai/examples): URL needs a project and location; uses an access token.
+- [IBM watsonx.ai](https://cloud.ibm.com/apidocs/watsonx-ai-cp/watsonx-ai-cp-2.1.2): native chat uses a version query and project ID; not supported by ISA's custom client.
+- [Lepton AI](https://blog.lepton.ai/structural-decoding-function-calling-for-all-open-llms-a8823243b67c): documented examples use model/deployment-specific hosts; verify current service details.
+- [LM Studio](https://lmstudio.ai/docs/developer/openai-compat): normally a local HTTP endpoint, which the custom-provider URL validator deliberately rejects.
+- [Modal](https://modal.com/docs/examples/vllm_inference): URL depends on the deployed service and its implementation.
+- [Oracle Cloud Infrastructure](https://docs.oracle.com/en-us/iaas/Content/generative-ai/openai-compatible-api.htm): endpoint and credentials depend on region and OCI configuration; native request signing is not supported by ISA.
+- [Predibase](https://docs.predibase.com/api-reference/inference-api/create-chat-completion): URL includes tenant and deployment names.
+- [Replicate](https://replicate.com/docs/topics/predictions/streaming): documented prediction/streaming protocol differs from ISA's Chat Completions client; a compatible universal URL was not verified.
+- [RunPod](https://docs.runpod.io/migrate/replicate): compatible URL is specific to a public endpoint or deployment.
+- [Snowflake Cortex](https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api): URL includes the Snowflake account identifier.
+
+Other newly suggested endpoints: [AI21](https://docs.ai21.com/reference/jamba-1-6-api-ref),
+[FriendliAI](https://friendli.ai/docs/guides/openai-compatibility),
+[Hyperbolic](https://www.hyperbolic.ai/docs/inference/text-apis),
+[Infermatic](https://infermatic.ai/docs/overview/),
+[Jina DeepSearch](https://github.com/jina-ai/node-deepresearch),
+[Ollama Cloud](https://docs.ollama.com/api/introduction),
+[Perplexity](https://docs.perplexity.ai/guides/chat-completions-sdk), and
+[Vercel AI Gateway](https://vercel.com/docs/ai-gateway/sdks-and-apis/openai-chat-completions).
+Ollama Cloud is a separate custom-provider option; it does not replace the
+server-configured local Ollama integration. Jina's suggestion is specifically
+for DeepSearch. Provider feature and streaming support vary by model.
+
+### Experimental xKiro bridge
+
+The exact `https://api.xkiro.com/v1/chat/completions` URL is routed through
+`/api/providers/xkiro/chat/completions` on the Rust server for chat and pools.
+The bridge accepts only direct IPv4 loopback, same-origin JSON requests at the
+server's exact loopback address, and sends only the JSON body and optional
+bearer authorization to the fixed HTTPS destination. It rejects redirects,
+proxy environment settings, and non-public resolved addresses and pins checked
+DNS addresses. It does not log the request or bearer key. The browser still
+holds the key in session storage; local processes and scripts on the origin are
+not isolated from it. Only this exact endpoint is bridged; other providers stay
+direct. The Node preview does not implement the bridge. Remote/LAN origins are
+not supported by this route.
+
+The bridge forwards JSON and SSE with an 8 MiB response cap and a five-minute
+timeout. A browser abort closes its connection; the server can detect it on a
+subsequent write, but upstream computation may continue until then or until the
+timeout. Provider HTTP errors are reported without their bodies and Retry-After
+is forwarded when safe. A provider outage, invalid key or unsupported model can
+still fail. This code has not yet been compiled or tested end-to-end with a
+real xKiro account or Windows WebView; it should be treated as experimental.

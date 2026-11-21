@@ -7,6 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>Isa.Desktop</AssemblyName>
     <RootNamespace>Isa.Desktop</RootNamespace>
+    <ApplicationIcon>isa.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />

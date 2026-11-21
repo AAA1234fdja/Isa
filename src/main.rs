@@ -9,6 +9,7 @@ mod web_audit_crypto;
 mod web_audit_store;
 mod web_supervision;
 mod windows_supervision_gate;
+mod xkiro_bridge;
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
@@ -394,6 +395,10 @@ fn handle_request(mut stream: TcpStream, assets: ui_assets::AssetMode) -> io::Re
     let target = request.target.as_str();
     let (path, query_string) = target.split_once('?').unwrap_or((target, ""));
 
+    if method == "POST" && path == "/api/providers/xkiro/chat/completions" {
+        return xkiro_bridge::handle(&request, &mut stream);
+    }
+
     // Read the development assets on each request so the browser can detect edits.
     // Only explicit paths are served; arbitrary filesystem access is not allowed.
     let (status, content_type, body): (&str, &str, Vec<u8>) = match (method, path) {
@@ -436,7 +441,7 @@ fn handle_request(mut stream: TcpStream, assets: ui_assets::AssetMode) -> io::Re
                 let available = env::var("ISA_WEB_MODEL")
                     .ok()
                     .is_some_and(|s| !s.trim().is_empty());
-                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"backendKind":"rust","localActionsPlatformSupported":web_supervision::platform_supported(),"localActionsWindowsReadOnly":windows_supervision_gate::enabled(),"localActionsWindowsShellExperimental":windows_supervision_gate::shell_enabled(),"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"symbolLookupAvailable":agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
+                ("200 OK", "application/json; charset=utf-8", serde_json::to_vec(&serde_json::json!({"backendKind":"rust","windowsSandboxAvailable":false,"localActionsPlatformSupported":web_supervision::platform_supported(),"localActionsWindowsReadOnly":windows_supervision_gate::enabled(),"localActionsWindowsShellExperimental":windows_supervision_gate::shell_enabled(),"ollamaConfigured":available,"pluginRuntime":true,"agentLoopAvailable":available && agent_workspace().is_some(),"symbolLookupAvailable":agent_workspace().is_some(),"catalog":catalog})).unwrap_or_default())
             }
         }
         ("POST", "/api/edit-proposal") => {

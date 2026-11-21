@@ -143,7 +143,8 @@ var __isaProviderClientBundle = (() => {
       const headers = { "Content-Type": "application/json" }, key = getSecret(id);
       if (key) headers.Authorization = "Bearer " + key;
       try {
-        const response = await fetch(endpoint, { method: "POST", headers, body: JSON.stringify(payload), signal, credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" });
+        const transportEndpoint = endpoint === "https://api.xkiro.com/v1/chat/completions" ? "/api/providers/xkiro/chat/completions" : endpoint;
+        const response = await fetch(transportEndpoint, { method: "POST", headers, body: JSON.stringify(payload), signal, credentials: "omit", redirect: "error", referrerPolicy: "no-referrer" });
         if (!response.ok) {
           const transient = response.status === 408 || response.status === 429 || response.status >= 500;
           let retryAfterMs = null;

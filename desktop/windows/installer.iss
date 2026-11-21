@@ -21,6 +21,7 @@ OutputBaseFilename=ISA-Desktop-Prototype-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=isa.ico
 UninstallDisplayIcon={app}\{#AppExe}
 
 [Tasks]

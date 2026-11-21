@@ -73,13 +73,23 @@ mod session;
 mod summary;
 mod symbols;
 #[cfg(test)]
+mod windows_sandbox_changes;
+#[cfg(test)]
 mod windows_sandbox_export_plan;
 #[cfg(test)]
 mod windows_sandbox_frame;
 #[cfg(test)]
 mod windows_sandbox_import_plan;
 #[cfg(test)]
+mod windows_sandbox_lifecycle;
+#[cfg(test)]
 mod windows_sandbox_manifest;
+#[cfg(test)]
+mod windows_sandbox_protocol;
+#[cfg(test)]
+mod windows_sandbox_transfer;
+#[cfg(test)]
+mod windows_sandbox_wire;
 #[cfg(test)]
 mod windows_sandbox_wsb;
 mod work;
