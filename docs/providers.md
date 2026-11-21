@@ -56,7 +56,15 @@ before configuring a provider.
 The directory now includes xKiro and offers editable URL suggestions for
 providers with documented public Chat Completions endpoints. The full model ID
 and any API key must still be supplied, and browser CORS support has not been
-verified. No endpoint is auto-connected. Services without a fixed, documented
+verified. No endpoint is auto-connected. Saving a provider or creating an Agent
+Pool does not test connectivity: the first request can still fail. For xKiro,
+use `https://api.xkiro.com/v1/chat/completions` as the full endpoint and verify
+the model ID against its current catalog. If a request fails with the generic
+network/CORS message, check the browser or WebView developer tools for the
+failed request and CORS details; network failures, rejected redirects, and
+CORS can produce the same message. Do not share API keys, Authorization headers,
+or unredacted network exports when requesting help. Do not disable browser
+security to work around the error. Services without a fixed, documented
 compatible endpoint still require a manually supplied URL. Region-specific or
 account-specific endpoints may differ from a suggested default. Set up always creates a new configuration; each saved configuration must have a
 unique name (case-insensitive). Edit existing configurations in the saved list.
